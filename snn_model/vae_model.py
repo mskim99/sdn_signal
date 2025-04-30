@@ -1,21 +1,7 @@
-import os
-import sys
-
-import math
 import random
-import numpy as np
-import pandas as pd
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.nn.modules.module import T
 import torch.utils.data.dataloader
-from torchvision import datasets, transforms
 
-from spikingjelly.activation_based import neuron, functional ,layer, surrogate, monitor
-from spikingjelly import visualizing
-import matplotlib.pyplot as plt
+from spikingjelly.activation_based import neuron, layer, surrogate
 
 from .snn_layers import *
 

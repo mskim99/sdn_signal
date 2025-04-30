@@ -1,7 +1,12 @@
 import torch.utils.data.dataloader
 import argparse
-from snn_model.vq_diffusion import *
 from load_dataset_snn import *
+
+from snn_model.vae_model import *
+from snn_model.vae_model_1d import SNN_VQVAE_1D
+from spikingjelly.activation_based import functional
+
+import matplotlib as plt
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 os.environ['RANK'] = '0'
@@ -54,6 +59,12 @@ if __name__ == '__main__':
     elif args.dataset_name == 'Letters':
         train_loader, test_loader = load_MNIST_Letters(data_path=args.data_path, batch_size=batch_size)
         print("load data: Letters!")
+    elif args.dataset_name == 'SignalImage':
+        train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal & Image!")
+    elif args.dataset_name == 'Signal':
+        train_loader, test_loader = load_signal_1d(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal (1D)!")
 
     # compute the variance of the whole training set to normalise the Mean Squared Error below.
     train_images = []
@@ -64,6 +75,9 @@ if __name__ == '__main__':
 
     if args.model == 'snn-vq-vae':
         model = SNN_VQVAE(1, embedding_dim, num_embeddings, train_data_variance)
+        functional.set_step_mode(net=model, step_mode='m')
+    if args.model == 'snn-vq-vae_1d':
+        model = SNN_VQVAE_1D(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='m')
     elif args.model == 'snn-vq-vae-uni':
         model = SNN_VQVAE_uni(1, embedding_dim, num_embeddings, train_data_variance)
@@ -93,12 +107,16 @@ if __name__ == '__main__':
         if args.model == 'vae':
             model.update_p(epoch, epochs)
         for i, (images, labels) in enumerate(train_loader):
-            images = images - 0.5  # normalize to [-0.5, 0.5]
             images = images.cuda(0)
-            images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+            print(images.shape)
+            if args.model != 'snn-vq-vae_1d':
+                images = images - 0.5  # normalize to [-0.5, 0.5]
+                images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+            else:
+                images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1)
             if args.model == 'snn-vae':
                 loss_eq, loss_rec = model(images_spike, images)
-            elif args.model == 'snn-vq-vae' or args.model == 'snn-vq-vae-uni':
+            elif args.model == 'snn-vq-vae' or args.model == 'snn-vq-vae-uni' or args.model == 'snn-vq-vae_1d':
                 loss_eq, loss_rec, real_loss_rec = model(images_spike, images)
             elif args.model == 'vq-vae':
                 loss_eq, loss_rec, real_loss_rec = model(images)
@@ -144,7 +162,7 @@ if __name__ == '__main__':
                 images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
                 e, recon_images = model(images_spike, norm_images)
                 functional.reset_net(model)
-            elif args.model == ('snn-vq-vae'):
+            elif args.model == 'snn-vq-vae':
                 images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
@@ -153,23 +171,27 @@ if __name__ == '__main__':
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
 
-        recon_images = np.array(np.clip((recon_images + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-        ori_images = np.array(images.numpy() * 255, dtype=np.uint8)
+        print(recon_images.shape)
 
-        recon_images = recon_images.reshape(4, 8, 28, 28)
-        ori_images = ori_images.reshape(4, 8, 28, 28)
+        if epoch % 5 == 0:
+            if args.model != 'vq-vae_1d':
+                recon_images = np.array(np.clip((recon_images + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
+                ori_images = np.array(images.numpy() * 255, dtype=np.uint8)
 
-        fig = plt.figure(figsize=(10, 10), constrained_layout=True)
-        gs = fig.add_gridspec(8, 8)
-        for n_row in range(4):
-            for n_col in range(8):
-                f_ax = fig.add_subplot(gs[n_row * 2, n_col])
-                f_ax.imshow(ori_images[n_row, n_col], cmap="gray")
-                f_ax.axis("off")
-                f_ax = fig.add_subplot(gs[n_row * 2 + 1, n_col])
-                f_ax.imshow(recon_images[n_row, n_col], cmap="gray")
-                f_ax.axis("off")
+                recon_images = recon_images.reshape(4, 8, 192, 192)
+                ori_images = ori_images.reshape(4, 8, 192, 192)
 
-        plt.savefig("./result/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.png")
+                fig = plt.figure(figsize=(10, 10), constrained_layout=True)
+                gs = fig.add_gridspec(8, 8)
+                for n_row in range(4):
+                    for n_col in range(8):
+                        f_ax = fig.add_subplot(gs[n_row * 2, n_col])
+                        f_ax.imshow(ori_images[n_row, n_col], cmap="gray")
+                        f_ax.axis("off")
+                        f_ax = fig.add_subplot(gs[n_row * 2 + 1, n_col])
+                        f_ax.imshow(recon_images[n_row, n_col], cmap="gray")
+                        f_ax.axis("off")
 
-        torch.save(model.state_dict(), save_path + '/model.pth')
+                plt.savefig("./result/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.png")
+
+        torch.save(model.state_dict(), save_path + '/model_ae_' + str(epoch) + '.pth')
