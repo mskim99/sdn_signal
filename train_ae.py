@@ -32,7 +32,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
     parser.add_argument('--sample_model', type=str, default='pixelsnn')
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')

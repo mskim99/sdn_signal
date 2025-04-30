@@ -1,13 +1,12 @@
 import torch.utils.data.dataloader
-import tqdm
 import argparse
 from snn_model.vq_diffusion import *
 from load_dataset_snn import *
-import metric.pytorch_ssim
 
 from metric.IS_score import *
 from metric.Fid_score import *
-from torchmetrics.image.kid import KernelInceptionDistance
+
+import matplotlib.pyplot as plt
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 os.environ['RANK'] = '0'
@@ -45,7 +44,7 @@ if __name__ == '__main__':
         os.makedirs("./result/" + args.dataset_name + '/' + args.model)
     save_path = "./result/" + args.dataset_name + '/' + args.model
 
-    batch_size = 32
+    batch_size = 16
     embedding_dim = 16
     num_embeddings = args.codebook_size
     if args.dataset_name == 'MNIST':
@@ -60,6 +59,9 @@ if __name__ == '__main__':
     elif args.dataset_name == 'Letters':
         train_loader, test_loader = load_MNIST_Letters(data_path=args.data_path, batch_size=batch_size)
         print("load data: Letters!")
+    elif args.dataset_name == 'SignalImage':
+        train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal & Image!")
 
     # compute the variance of the whole training set to normalise the Mean Squared Error below.
     train_images = []
@@ -140,12 +142,13 @@ if __name__ == '__main__':
             print("[{}/{}][{}/{}]: loss {:.3f} ".format(epoch, epochs, batch_idx, len(train_loader),
                                                         (loss).item()))
             # break
-        if epoch % 10 == 0:
+        if epoch % 2 == 0:
 
             denoise_fn.eval()
             sample_list = []
             for i in range(2):
-                sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
+                # sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
+                sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 48, 48)
                 sample_list.append(sample)
             sample = torch.cat(sample_list, dim=0)
             with torch.inference_mode():
@@ -160,7 +163,8 @@ if __name__ == '__main__':
                 pred = torch.tanh(model.memout(pred))
 
             generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-            generated_samples = generated_samples.reshape(4, 8, 28, 28)
+            # generated_samples = generated_samples.reshape(4, 8, 28, 28)
+            generated_samples = generated_samples.reshape(4, 8, 192, 192)
 
             fig = plt.figure(figsize=(10, 5), constrained_layout=True)
             gs = fig.add_gridspec(4, 8)

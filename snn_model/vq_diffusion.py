@@ -18,8 +18,9 @@ def get_data_for_diff(train_loader,model):
 
         with torch.inference_mode():
             _,_,encoding_indices = model(images_spike,images) # [B, C, H, W, T]
-            train_indices.append(encoding_indices.reshape(images.shape[0],7,7).cpu())
-        #break
+            # train_indices.append(encoding_indices.reshape(images.shape[0],7,7).cpu())
+            train_indices.append(encoding_indices.reshape(images.shape[0], 48, 48).cpu())
+
     return train_indices  
 
 class Sampler(nn.Module):
@@ -48,17 +49,15 @@ class AbsorbingDiffusion(Sampler):
     def q_sample(self, x_0, t):
         x_t, x_0_ignore = x_0.clone(), x_0.clone()
         t_mask = t.reshape(x_0.shape[0], 1, 1,1)
-        t_mask = t_mask.expand(x_0.shape[0], 1, 7, 7) # 和x形状相同进行掩码    
+        # t_mask = t_mask.expand(x_0.shape[0], 1, 7, 7)
+        t_mask = t_mask.expand(x_0.shape[0], 1, 48, 48)
         mask = torch.rand_like(x_t.float()) < (t_mask.float() / self.num_timesteps)
 
-        # 将x_t中mask为1的位置替换为self.mask_id，这是一个特殊的标识符，表示该位置被掩码了。
         x_t[mask] = self.mask_id
 
-        # 将x_0_ignore中mask为0的位置替换为-1，这是一个忽略索引，表示该位置不参与损失计算
         x_0_ignore[torch.bitwise_not(mask)] = -1
         return x_t, x_0_ignore, mask
 
-    
     def _train_loss(self, x_0):
 
         b, device = x_0.size(0), x_0.device
@@ -69,19 +68,26 @@ class AbsorbingDiffusion(Sampler):
 
         x_0_hat_logits = self._denoise_fn(x_t, t=t)
 
-        cross_entropy_loss = F.cross_entropy(x_0_hat_logits.reshape(b,self.num_classes,49), x_0_ignore.reshape(b,49).type(torch.LongTensor).to(device), 
-        ignore_index=-1, reduction='none').sum(1)
-        
-        vb_loss = cross_entropy_loss / t
-        vb_loss = vb_loss / pt
-        vb_loss = vb_loss / (math.log(2) * x_0.shape[1:].numel())
+        if self.loss_type == 'mse':
+            loss = torch.abs(x_0_hat_logits - x_0_ignore)
+        elif self.loss_type == 'elbo' or self.loss_type == 'reweighted_elbo':
+            x_t, x_0_ignore, mask = self.q_sample(x_0=x_0, t=t)
 
-        if self.loss_type == 'elbo':
-            loss = vb_loss
-        elif self.loss_type == 'reweighted_elbo': 
-            weight = (1 - (t / self.num_timesteps))
-            loss = weight * cross_entropy_loss
-            loss = loss / (math.log(2) * x_0.shape[1:].numel())
+            x_0_hat_logits = self._denoise_fn(x_t, t=t)
+
+            cross_entropy_loss = F.cross_entropy(x_0_hat_logits.reshape(b,self.num_classes,2304), x_0_ignore.reshape(b,2304).type(torch.LongTensor).to(device),
+            ignore_index=-1, reduction='none').sum(1)
+
+            vb_loss = cross_entropy_loss / t
+            vb_loss = vb_loss / pt
+            vb_loss = vb_loss / (math.log(2) * x_0.shape[1:].numel())
+
+            if self.loss_type == 'elbo':
+                loss = vb_loss
+            elif self.loss_type == 'reweighted_elbo':
+                weight = (1 - (t / self.num_timesteps))
+                loss = weight * cross_entropy_loss
+                loss = loss / (math.log(2) * x_0.shape[1:].numel())
         else:
             raise ValueError
 
@@ -90,18 +96,17 @@ class AbsorbingDiffusion(Sampler):
     def sample(self, temp=1.0, sample_steps=None):
 
         b, device = int(self.n_samples), 'cuda'
-        x_t = torch.ones(b,1,7,7, device=device).long() * self.mask_id  
+        # x_t = torch.ones(b,1,7,7, device=device).long() * self.mask_id
+        x_t = torch.ones(b, 1, 48, 48, device=device).long() * self.mask_id
         unmasked = torch.zeros_like(x_t, device=device).bool()
-        # 确定sample的次数 一般是7*7  每一次去掉一个掩码
-        # 如果小于该数值 则等效于跳步
+
         sample_steps = list(range(1, sample_steps+1))            
         for t in reversed(sample_steps):
-            #print(f'Sample timestep {t:4d}', end='\r')
             t = torch.full((b,), t, device=device, dtype=torch.long)
 
             # where to unmask
             t_mask = t.reshape(b, 1, 1,1)
-            t_mask = t_mask.expand(b, 1, 7, 7)
+            t_mask = t_mask.expand(b, 1, 48, 48)
             changes = torch.rand_like(x_t.float()) < 1/t_mask.float()
             changes = changes
 
