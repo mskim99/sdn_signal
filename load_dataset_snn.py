@@ -438,10 +438,11 @@ def load_MNIST_C(data_path, option='zigzag'):
     return mnist_c_loader
 
 class SignalToImageDataset(VisionDataset):
-    def __init__(self, data_path, image_shape=(192, 192), train=True, split_ratio=0.8, transform=None):
+    def __init__(self, data_path, image_shape=(28, 28), train=True, split_ratio=0.8, transform=None):
         self.data_path = data_path
-        list = glob.glob(data_path + '/signal_img/*.jpeg')
+        list = glob.glob(data_path + '/signal_img_res_28/*.jpeg')
         len_list = len(list)
+        # random.shuffle(list)
         if train:
             self.data_list = list[:int(split_ratio*len_list)]
         else: # test
@@ -474,11 +475,52 @@ def load_signal_to_image(data_path, batch_size):
     return trainloader, testloader
 
 
+class SignalToImageLabelDataset(VisionDataset):
+    def __init__(self, data_path, image_shape=(28, 28), train=True, split_ratio=0.8, transform=None):
+        self.data_path = data_path
+        list = glob.glob(data_path + '/signal_img/*.jpeg')
+        len_list = len(list)
+        if train:
+            self.data_list = list[:int(split_ratio*len_list)]
+        else: # test
+            self.data_list = list[int(split_ratio*len_list):]
+        self.image_shape = image_shape
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.data_list)
+
+    def __getitem__(self, idx):
+        dir = self.data_list[idx]
+        data = cv2.imread(dir)
+        data = data[:, :, 0]
+        data = torch.from_numpy(data).unsqueeze(0)  # (1, H, W) 형태로 변환
+        data = data / 255.
+
+        label = int(dir.split('_')[-1].split('.')[0])
+        print(label)
+
+        return data, label
+
+
+def load_signal_to_image_label(data_path, batch_size):
+
+    trainset = SignalToImageLabelDataset(data_path, train=True)
+    testset = SignalToImageLabelDataset(data_path, train=False)
+
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=2,
+                                              pin_memory=True)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=2,
+                                             pin_memory=True)
+    return trainloader, testloader
+
+
 class SignalDataset(VisionDataset):
     def __init__(self, data_path, shape=(48000), train=True, split_ratio=0.8, transform=None):
         self.data_path = data_path
         list = glob.glob(data_path + '/signal_1d/*.npy')
         len_list = len(list)
+        random.shuffle(list)
         if train:
             self.data_list = list[:int(split_ratio*len_list)]
         else: # test
@@ -495,7 +537,7 @@ class SignalDataset(VisionDataset):
         # data = data[:, :, 0]
         data = torch.from_numpy(data).unsqueeze(0)  # (1, N) 형태로 변환
         # data = data / 255.
-        # data = (data - data.min()) / (data.max() - data.min())
+        data = (data - data.min()) / (data.max() - data.min())
 
         return data, data
 

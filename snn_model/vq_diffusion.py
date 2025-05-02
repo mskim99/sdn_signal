@@ -18,8 +18,8 @@ def get_data_for_diff(train_loader,model):
 
         with torch.inference_mode():
             _,_,encoding_indices = model(images_spike,images) # [B, C, H, W, T]
-            # train_indices.append(encoding_indices.reshape(images.shape[0],7,7).cpu())
-            train_indices.append(encoding_indices.reshape(images.shape[0], 48, 48).cpu())
+            train_indices.append(encoding_indices.reshape(images.shape[0],7,7).cpu())
+            # train_indices.append(encoding_indices.reshape(images.shape[0], 48, 48).cpu())
 
     return train_indices  
 
@@ -31,14 +31,15 @@ class Sampler(nn.Module):
 class AbsorbingDiffusion(Sampler):
     def __init__(self, denoise_fn, mask_id):
         super().__init__()
-        self.num_classes = denoise_fn.num_embeddings
+        # self.num_classes = denoise_fn.num_embeddings
+        self.num_classes = mask_id
         self.shape = [7,7]
         self.num_timesteps = 49
         self.mask_id = mask_id
         self._denoise_fn = denoise_fn
         self.n_samples = 16
         self.mask_schedule = 'random'
-        self.loss_type = 'reweighted_elbo'
+        self.loss_type = 'mse'
 
 
     def sample_time(self, b, device):
@@ -49,8 +50,8 @@ class AbsorbingDiffusion(Sampler):
     def q_sample(self, x_0, t):
         x_t, x_0_ignore = x_0.clone(), x_0.clone()
         t_mask = t.reshape(x_0.shape[0], 1, 1,1)
-        # t_mask = t_mask.expand(x_0.shape[0], 1, 7, 7)
-        t_mask = t_mask.expand(x_0.shape[0], 1, 48, 48)
+        t_mask = t_mask.expand(x_0.shape[0], 1, 7, 7)
+        # t_mask = t_mask.expand(x_0.shape[0], 1, 48, 48)
         mask = torch.rand_like(x_t.float()) < (t_mask.float() / self.num_timesteps)
 
         x_t[mask] = self.mask_id
@@ -75,7 +76,7 @@ class AbsorbingDiffusion(Sampler):
 
             x_0_hat_logits = self._denoise_fn(x_t, t=t)
 
-            cross_entropy_loss = F.cross_entropy(x_0_hat_logits.reshape(b,self.num_classes,2304), x_0_ignore.reshape(b,2304).type(torch.LongTensor).to(device),
+            cross_entropy_loss = F.cross_entropy(x_0_hat_logits.reshape(b,self.num_classes,49), x_0_ignore.reshape(b,49).type(torch.LongTensor).to(device),
             ignore_index=-1, reduction='none').sum(1)
 
             vb_loss = cross_entropy_loss / t
@@ -96,8 +97,8 @@ class AbsorbingDiffusion(Sampler):
     def sample(self, temp=1.0, sample_steps=None):
 
         b, device = int(self.n_samples), 'cuda'
-        # x_t = torch.ones(b,1,7,7, device=device).long() * self.mask_id
-        x_t = torch.ones(b, 1, 48, 48, device=device).long() * self.mask_id
+        x_t = torch.ones(b,1,7,7, device=device).long() * self.mask_id
+        # x_t = torch.ones(b, 1, 48, 48, device=device).long() * self.mask_id
         unmasked = torch.zeros_like(x_t, device=device).bool()
 
         sample_steps = list(range(1, sample_steps+1))            
@@ -106,7 +107,8 @@ class AbsorbingDiffusion(Sampler):
 
             # where to unmask
             t_mask = t.reshape(b, 1, 1,1)
-            t_mask = t_mask.expand(b, 1, 48, 48)
+            t_mask = t_mask.expand(b, 1, 7, 7)
+            # t_mask = t_mask.expand(b, 1, 48, 48)
             changes = torch.rand_like(x_t.float()) < 1/t_mask.float()
             changes = changes
 

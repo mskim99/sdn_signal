@@ -9,11 +9,12 @@ from metric.IS_score import *
 from metric.Fid_score import *
 from torchmetrics.image.kid import KernelInceptionDistance
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+import matplotlib.pyplot as plt
+
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = '127.0.0.1'
-
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -60,6 +61,9 @@ if __name__ == '__main__':
     elif args.dataset_name == 'Letters':
         train_loader, test_loader = load_MNIST_Letters(data_path=args.data_path, batch_size=batch_size)
         print("load data: Letters!")
+    elif args.dataset_name == 'SignalImage':
+        train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal & Image!")
 
     # compute the variance of the whole training set to normalise the Mean Squared Error below.
     train_images = []
@@ -166,8 +170,8 @@ if __name__ == '__main__':
         for tem in tqdm.tqdm(temp, desc='drawing', total=len(temp)):
             for k in range(20):
                 sample_list = []
-                for i in range(2):
-                    sample = (abdiff.sample(temp=tem, sample_steps=49)).reshape(16, 7, 7)
+                for i in range(1):
+                    sample = (abdiff.sample(temp=tem, sample_steps=100)).reshape(16, 48, 48)
                     sample_list.append(sample)
                     functional.reset_net(denoise_fn)
                 sample = torch.cat(sample_list, dim=0)
@@ -185,13 +189,13 @@ if __name__ == '__main__':
                     pred = torch.tanh(model.memout(pred))
 
                 generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-                generated_samples = generated_samples.reshape(4, 8, 28, 28)
+                generated_samples = generated_samples.reshape(4, 4, 192, 192)
                 functional.reset_net(model)
                 functional.reset_net(denoise_fn)
                 fig = plt.figure(figsize=(10, 5), constrained_layout=True)
-                gs = fig.add_gridspec(4, 8)
+                gs = fig.add_gridspec(4, 4)
                 for n_row in range(4):
-                    for n_col in range(8):
+                    for n_col in range(4):
                         f_ax = fig.add_subplot(gs[n_row, n_col])
                         f_ax.imshow(generated_samples[n_row, n_col], cmap="gray")
                         f_ax.axis("off")
@@ -205,7 +209,7 @@ if __name__ == '__main__':
         all_images_list = []
         for tem in temp:
             for i in tqdm.tqdm(range(80), desc='Sampling_for_temp=' + str(tem), total=80):
-                sample = (abdiff.sample(temp=tem, sample_steps=49)).reshape(16, 7, 7)
+                sample = (abdiff.sample(temp=tem, sample_steps=49)).reshape(16, 48, 48)
                 with torch.inference_mode():
                     z = model.vq_layer.quantize(sample.cuda(0))
 

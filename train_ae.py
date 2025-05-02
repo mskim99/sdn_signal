@@ -6,7 +6,7 @@ from snn_model.vae_model import *
 from snn_model.vae_model_1d import SNN_VQVAE_1D
 from spikingjelly.activation_based import functional
 
-import matplotlib as plt
+import matplotlib.pyplot as plt
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 os.environ['RANK'] = '0'
@@ -28,21 +28,23 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
+    parser.add_argument('--dir_name', type=str, default='result_cb_256')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
     parser.add_argument('--sample_model', type=str, default='pixelsnn')
-    parser.add_argument('--epochs', type=int, default=30)
+    parser.add_argument('--epochs', type=int, default=101)
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')
-    parser.add_argument('--codebook_size', type=int, default=128)
+    parser.add_argument('--codebook_size', type=int, default=256)
+    parser.add_argument('--resolution', type=int, default=28)
     args = parser.parse_args()
 
     setup_seed(args.seed)
-    if not os.path.exists("./result/" + args.dataset_name + '/' + args.model):
-        os.makedirs("./result/" + args.dataset_name + '/' + args.model)
-    save_path = "./result/" + args.dataset_name + '/' + args.model
+    if not os.path.exists("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model):
+        os.makedirs("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model)
+    save_path = "./" + args.dir_name + "/" + args.dataset_name + '/' + args.model
 
     batch_size = 32
     embedding_dim = 16
@@ -62,6 +64,9 @@ if __name__ == '__main__':
     elif args.dataset_name == 'SignalImage':
         train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
         print("load data: Signal & Image!")
+    elif args.dataset_name == 'SignalImageLabel':
+        train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal & Image (Label)!")
     elif args.dataset_name == 'Signal':
         train_loader, test_loader = load_signal_1d(data_path=args.data_path, batch_size=batch_size)
         print("load data: Signal (1D)!")
@@ -108,7 +113,7 @@ if __name__ == '__main__':
             model.update_p(epoch, epochs)
         for i, (images, labels) in enumerate(train_loader):
             images = images.cuda(0)
-            print(images.shape)
+            # print(images.shape)
             if args.model != 'snn-vq-vae_1d':
                 images = images - 0.5  # normalize to [-0.5, 0.5]
                 images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
@@ -136,7 +141,7 @@ if __name__ == '__main__':
                                                                                               float(loss_eq),
                                                                                               float(loss_rec)))
                     # break
-                elif args.model == 'snn-vq-vae' or args.model == 'vq-vae' or args.model == 'snn-vq-vae-uni':
+                elif args.model == 'snn-vq-vae' or args.model == 'vq-vae' or args.model == 'snn-vq-vae-uni' or args.model == 'snn-vq-vae_1d' :
                     print("[{}/{}][{}/{}]: loss {:.3f} loss_eq {:.3f} loss_rec {:.3f}".format(epoch, epochs, i,
                                                                                               len(train_loader),
                                                                                               (
@@ -166,20 +171,22 @@ if __name__ == '__main__':
                 images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
+            elif args.model == "snn-vq-vae_1d":
+                images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1)
+                e, recon_images, _ = model(images_spike, norm_images)
+                functional.reset_net(model)
             elif args.model == "snn-vq-vae-uni":
                 images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
 
-        print(recon_images.shape)
-
-        if epoch % 5 == 0:
-            if args.model != 'vq-vae_1d':
+        if epoch % 20 == 0:
+            if args.model != 'snn-vq-vae_1d':
                 recon_images = np.array(np.clip((recon_images + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
                 ori_images = np.array(images.numpy() * 255, dtype=np.uint8)
 
-                recon_images = recon_images.reshape(4, 8, 192, 192)
-                ori_images = ori_images.reshape(4, 8, 192, 192)
+                recon_images = recon_images.reshape(4, 8, args.resolution, args.resolution)
+                ori_images = ori_images.reshape(4, 8, args.resolution, args.resolution)
 
                 fig = plt.figure(figsize=(10, 10), constrained_layout=True)
                 gs = fig.add_gridspec(8, 8)
@@ -192,6 +199,8 @@ if __name__ == '__main__':
                         f_ax.imshow(recon_images[n_row, n_col], cmap="gray")
                         f_ax.axis("off")
 
-                plt.savefig("./result/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.png")
+                plt.savefig("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.png")
+            else:
+                np.save("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.npy", recon_images.cpu().numpy())
 
-        torch.save(model.state_dict(), save_path + '/model_ae_' + str(epoch) + '.pth')
+            torch.save(model.state_dict(), save_path + '/model_ae_' + str(epoch) + '.pth')

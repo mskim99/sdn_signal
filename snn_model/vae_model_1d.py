@@ -18,8 +18,8 @@ class VectorQuantizer(nn.Module):
         # self.alpha=1
         self.embeddings = nn.Embedding(self.num_embeddings, self.embedding_dim)
         self.poisson = nn.Sequential(
-            layer.Conv2d(in_channels=16, out_channels=16, kernel_size=1),
-            layer.BatchNorm2d(16),
+            layer.Conv1d(in_channels=16, out_channels=16, kernel_size=1),
+            layer.BatchNorm1d(16),
             neuron.LIFNode(surrogate_function=surrogate.ATan()),
         )
 
@@ -38,8 +38,8 @@ class VectorQuantizer(nn.Module):
 
         if not self.training:
             quantized = quantized.permute(0, 3, 1, 2).contiguous()  # [128, 16, 7, 7]
-            quantized = torch.unsqueeze(quantized, dim=0)  # [1, 128, 16, 7, 7]
-            quantized = quantized.repeat(16, 1, 1, 1, 1)  # [16, 128, 16, 7, 7]
+            # quantized = torch.unsqueeze(quantized, dim=0)  # [1, 128, 16, 7, 7]
+            # quantized = quantized.repeat(16, 1, 1, 1, 1)  # [16, 128, 16, 7, 7]
             quantized = self.poisson(quantized)  # [16, 128, 16, 7, 7]
             return quantized, encoding_indices
 
@@ -59,8 +59,8 @@ class VectorQuantizer(nn.Module):
         quantized = quantized.permute(0, 3, 1, 2).contiguous()
 
         # FIXME:
-        quantized = torch.unsqueeze(quantized, dim=0)  # [1,128,16,7,7]
-        quantized = quantized.repeat(16, 1, 1, 1, 1)  # [16,128,16,7,7]
+        # quantized = torch.unsqueeze(quantized, dim=0)  # [1,128,16,7,7]
+        # quantized = quantized.repeat(16, 1, 1, 1, 1)  # [16,128,16,7,7]
         quantized = self.poisson(quantized)  # [16,128,16,7,7]
 
         q_latent_loss_2 = torch.mean((self.psp(quantized) - self.psp(x.detach())) ** 2)

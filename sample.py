@@ -1,19 +1,20 @@
 import torch.utils.data.dataloader
+import tqdm
 import argparse
 from snn_model.vq_diffusion import *
-from snn_model.model_diffusion import Unet
 from load_dataset_snn import *
+import metric.pytorch_ssim
 
 from metric.IS_score import *
 from metric.Fid_score import *
+from torchmetrics.image.kid import KernelInceptionDistance
 
 import matplotlib.pyplot as plt
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '4'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = '127.0.0.1'
-
 
 def setup_seed(seed):
     torch.manual_seed(seed)
@@ -29,13 +30,11 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
-    parser.add_argument('--ae_dir_name', type=str, default='result')
-    parser.add_argument('--dir_name', type=str, default='diff_result_unet')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
     parser.add_argument('--sample_model', type=str, default='pixelsnn')
-    parser.add_argument('--epochs', type=int, default=400)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')
@@ -43,11 +42,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     setup_seed(args.seed)
-    if not os.path.exists("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model):
-        os.makedirs("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model)
-    save_path = "./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model
+    if not os.path.exists("./result/" + args.dataset_name + '/' + args.model):
+        os.makedirs("./result/" + args.dataset_name + '/' + args.model)
+    save_path = "./result/" + args.dataset_name + '/' + args.model
 
-    batch_size = 32
+    batch_size = 1
     embedding_dim = 16
     num_embeddings = args.codebook_size
     if args.dataset_name == 'MNIST':
@@ -75,29 +74,17 @@ if __name__ == '__main__':
 
     if args.model == 'snn-vq-vae':
         model = SNN_VQVAE(1, embedding_dim, num_embeddings, train_data_variance)
-        functional.set_step_mode(net=model, step_mode='m')
+        functional.set_step_mode(net = model, step_mode = 'm')
     elif args.model == 'snn-vq-vae-uni':
         model = SNN_VQVAE_uni(1, embedding_dim, num_embeddings, train_data_variance)
-        functional.set_step_mode(net=model, step_mode='m')
+        functional.set_step_mode(net = model, step_mode = 'm')
     elif args.model == 'snn-vae':
         model = SNN_VAE()
-        functional.set_step_mode(net=model, step_mode='m')
+        functional.set_step_mode(net = model, step_mode = 'm')
     elif args.model == 'vq-vae':
         model = VQVAE(1, embedding_dim, num_embeddings, train_data_variance)
     model = model.cuda(0)
-    print("The model is ready!")
 
-    optimizer = torch.optim.AdamW(model.parameters(),
-                                  lr=1e-3,
-                                  betas=(0.9, 0.999),
-                                  weight_decay=0.001)
-
-    # train VQ-VAE
-    epochs = args.epochs
-    print_freq = 20
-
-    # train diffusion
-    model.load_state_dict(torch.load(save_path + '/model.pth'))
     train_indices = get_data_for_diff(train_loader, model)
     print(len(train_indices))
     print(train_indices[0].shape)
@@ -113,73 +100,58 @@ if __name__ == '__main__':
         count = torch.min(counts).item()
         mask_id = count
 
-    print("mask_id = ", mask_id)
-    print('data for train diffusion is ready!')
-
-    # denoise_fn = DummyModel(1, num_embeddings).cuda(0)
-    denoise_fn = Unet(
-        dim=32,
-        dim_mults=(1,1,1,1),
-        channels=1,
-    ).cuda(0)
+    denoise_fn = DummyModel(1, num_embeddings).cuda(0)
     functional.set_step_mode(net=denoise_fn, step_mode='m')
     abdiff = AbsorbingDiffusion(denoise_fn, mask_id=mask_id)
 
-    if not os.path.exists("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name):
-        os.makedirs("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name)
-    save_path = "./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name
+    print("The model is ready!")
 
-    # optimizer = torch.optim.Adam(denoise_fn.parameters(), lr=1e-3)
-    optimizer = torch.optim.AdamW(denoise_fn.parameters(),
-                                  lr=1e-3,
-                                  betas=(0.9, 0.999),
-                                  weight_decay=0.001)
+    model.load_state_dict(torch.load(save_path + '/model.pth'))
+    denoise_fn.load_state_dict(torch.load(save_path + '/diff_result/diff_model.pth'))
 
-    for epoch in range(epochs):
+    model.eval()
+    denoise_fn.eval()
 
-        denoise_fn.train()
-        for batch_idx, (indices) in enumerate(train_indices):
-            indices = indices.float().cuda(0)
-            indices = indices.unsqueeze(dim=1)
-            loss = abdiff.train_iter(indices)
-            loss = loss['loss']
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            functional.reset_net(net=denoise_fn)
-            print("[{}/{}][{}/{}]: loss {:.3f} ".format(epoch, epochs, batch_idx, len(train_loader),
-                                                        (loss).item()))
-            # break
-        if epoch % 20 == 0:
+    for i, (images, labels) in enumerate(test_loader):
+        norm_images = (images - 0.5).cuda(0)
+        with torch.inference_mode():
+            images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+            if args.model == 'vq-vae':
+                e, recon_images = model(norm_images)
+            elif args.model == ('snn-vae' or 'snn-vq-vae-uni'):
+                e, recon_images = model(images_spike, norm_images)
+                functional.reset_net(model)
+            else:
+                e, recon_images, _ = model(images_spike, norm_images)
+                functional.reset_net(model)
 
-            denoise_fn.eval()
+    if not os.path.exists("./sample_part/" + args.dataset_name + '/' + args.model):
+        os.makedirs("./sample_part/" + args.dataset_name + '/' + args.model)
+    sample_path = "./sample_part/" + args.dataset_name + '/' + args.model
+
+    denoise_fn.eval()
+    temp = [0.001, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
+    for tem in tqdm.tqdm(temp, desc='drawing', total=len(temp)):
+        for k in range(20):
             sample_list = []
-            for i in range(2):
-                # sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
-                sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
+            for i in range(1):
+                sample = (abdiff.sample(temp=tem, sample_steps=100)).reshape(16, 48, 48)
                 sample_list.append(sample)
+                functional.reset_net(denoise_fn)
             sample = torch.cat(sample_list, dim=0)
             with torch.inference_mode():
                 z = model.vq_layer.quantize(sample.cuda(0))
+
                 z = z.permute(0, 3, 1, 2).contiguous()
+
                 quantized = torch.unsqueeze(z, dim=0)
                 quantized = quantized.repeat(16, 1, 1, 1, 1)
-
                 quantized = model.vq_layer.poisson(quantized)
+                # torch.Size([128, 16, 7, 7, 16])
 
                 pred = model.decoder(quantized)
                 pred = torch.tanh(model.memout(pred))
 
             generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-            # generated_samples = generated_samples.reshape(4, 8, 28, 28)
-            generated_samples = generated_samples.reshape(4, 8, 28, 28)
-
-            fig = plt.figure(figsize=(10, 5), constrained_layout=True)
-            gs = fig.add_gridspec(4, 8)
-            for n_row in range(4):
-                for n_col in range(8):
-                    f_ax = fig.add_subplot(gs[n_row, n_col])
-                    f_ax.imshow(generated_samples[n_row, n_col], cmap="gray")
-                    f_ax.axis("off")
-            plt.savefig(save_path + "/epoch=" + str(epoch) + "_test.png")
-            torch.save(denoise_fn.state_dict(), save_path + '/diff_model_' + str(epoch) + '.pth')
+            generated_samples = generated_samples.reshape(4, 4, 192, 192)
+            cv2.imwrite(sample_path + '/' + str(tem) + '/image_' + str(tem) + '_' + str(k) + '.png', generated_samples[0, 0, :, :])
