@@ -1,8 +1,9 @@
 import torch.utils.data.dataloader
+import torch.nn.functional as F
 
 from spikingjelly.activation_based import neuron, layer, surrogate
 
-from .snn_layers import *
+from .snn_layers_1d import *
 
 
 class VectorQuantizer(nn.Module):
@@ -27,7 +28,7 @@ class VectorQuantizer(nn.Module):
         # (T,N,C,H,W)->(N,C,H,W) 16 128 16 7 7
         x_memout = (1 - self.alpha) * self.memout(x) + self.alpha * torch.sum(x, dim=0) / self.num_step
         # [128, 16, 7, 7] -> [128, 7, 7,16]
-        x_memout = x_memout.permute(0, 2, 3, 1).contiguous()
+        x_memout = x_memout.permute(0, 2, 1).contiguous()
         # [128, 7, 7,16] -> [6272, 16]
         flat_x = x_memout.reshape(-1, self.embedding_dim)
 
@@ -37,9 +38,10 @@ class VectorQuantizer(nn.Module):
         quantized = quantized.view_as(x_memout)  # [128, 7, 7, 16]
 
         if not self.training:
-            quantized = quantized.permute(0, 3, 1, 2).contiguous()  # [128, 16, 7, 7]
+            quantized = quantized.permute(0, 2, 1).contiguous()  # [128, 16, 7, 7]
             # quantized = torch.unsqueeze(quantized, dim=0)  # [1, 128, 16, 7, 7]
             # quantized = quantized.repeat(16, 1, 1, 1, 1)  # [16, 128, 16, 7, 7]
+            # print(quantized.shape)
             quantized = self.poisson(quantized)  # [16, 128, 16, 7, 7]
             return quantized, encoding_indices
 
@@ -55,8 +57,8 @@ class VectorQuantizer(nn.Module):
         # forward quantized = quantized
         # backward quantized = x
         quantized = x_memout + (quantized - x_memout).detach()
-        # [128, 7, 7,16]->[128,16,7,7]
-        quantized = quantized.permute(0, 3, 1, 2).contiguous()
+        # [128, 7,16]->[128,16,7]
+        quantized = quantized.permute(0, 2, 1).contiguous()
 
         # FIXME:
         # quantized = torch.unsqueeze(quantized, dim=0)  # [1,128,16,7,7]
@@ -93,7 +95,7 @@ class Encoder(nn.Module):
         self.latent_dim = latent_dim
 
         self.snn_convs = nn.Sequential(
-            layer.Conv1d(in_channels=in_dim, out_channels=32, kernel_size=3,
+            layer.Conv1d(in_channels=32, out_channels=32, kernel_size=3,
                          stride=2, padding=1),
             layer.BatchNorm1d(32),
             neuron.LIFNode(surrogate_function=surrogate.ATan()),
@@ -111,7 +113,9 @@ class Encoder(nn.Module):
 
     def forward(self, x):
         # [t, b, c, h, w]
+        # x = x.unsqueeze(dim=1)
         x = self.snn_convs(x)
+        # x = x.squeeze(dim=1)
         return x
 
 
@@ -165,7 +169,6 @@ class SNN_VQVAE_1D(nn.Module):
     def forward(self, x, image):
         # x: [t, B, C, H, W]
         z = self.encoder(x)
-        # print(z.shape)
         if not self.training:
             e, enco = self.vq_layer(z)
             x_recon = self.decoder(e)

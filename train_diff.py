@@ -1,7 +1,13 @@
 import torch.utils.data.dataloader
 import argparse
+
+from snn_model.vae_model_1d import SNN_VQVAE_1D
 from snn_model.vq_diffusion import *
+from snn_model.vq_diffusion_1d import *
+from spikingjelly.activation_based import functional
+
 from snn_model.model_diffusion import Unet
+from snn_model.model_diffusion_1d import Unet1D
 from load_dataset_snn import *
 
 from metric.IS_score import *
@@ -65,6 +71,9 @@ if __name__ == '__main__':
     elif args.dataset_name == 'SignalImage':
         train_loader, test_loader = load_signal_to_image(data_path=args.data_path, batch_size=batch_size)
         print("load data: Signal & Image!")
+    elif args.dataset_name == 'Signal':
+        train_loader, test_loader = load_signal_1d(data_path=args.data_path, batch_size=batch_size)
+        print("load data: Signal (1D)!")
 
     # compute the variance of the whole training set to normalise the Mean Squared Error below.
     train_images = []
@@ -76,6 +85,9 @@ if __name__ == '__main__':
     if args.model == 'snn-vq-vae':
         model = SNN_VQVAE(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='m')
+    if args.model == 'snn-vq-vae_1d':
+        model = SNN_VQVAE_1D(1, embedding_dim, num_embeddings, train_data_variance)
+        functional.set_step_mode(net=model, step_mode='s')
     elif args.model == 'snn-vq-vae-uni':
         model = SNN_VQVAE_uni(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='m')
@@ -88,7 +100,7 @@ if __name__ == '__main__':
     print("The model is ready!")
 
     optimizer = torch.optim.AdamW(model.parameters(),
-                                  lr=1e-3,
+                                  lr=1e-4,
                                   betas=(0.9, 0.999),
                                   weight_decay=0.001)
 
@@ -98,7 +110,10 @@ if __name__ == '__main__':
 
     # train diffusion
     model.load_state_dict(torch.load(save_path + '/model.pth'))
-    train_indices = get_data_for_diff(train_loader, model)
+    if args.model == 'snn-vq-vae_1d':
+        train_indices = get_data_for_diff_1d(train_loader, model)
+    else:
+        train_indices = get_data_for_diff(train_loader, model)
     print(len(train_indices))
     print(train_indices[0].shape)
     print(train_indices[0][0])
@@ -117,19 +132,27 @@ if __name__ == '__main__':
     print('data for train diffusion is ready!')
 
     # denoise_fn = DummyModel(1, num_embeddings).cuda(0)
-    denoise_fn = Unet(
-        dim=32,
-        dim_mults=(1,1,1,1),
-        channels=1,
-    ).cuda(0)
-    functional.set_step_mode(net=denoise_fn, step_mode='m')
-    abdiff = AbsorbingDiffusion(denoise_fn, mask_id=mask_id)
+    if args.model == 'snn-vq-vae_1d':
+        denoise_fn = Unet1D(
+            dim=32,
+            dim_mults=(1,2,4,8),
+            channels=1,
+        ).cuda(0)
+        functional.set_step_mode(net=denoise_fn, step_mode='s')
+        abdiff = AbsorbingDiffusion1D(denoise_fn, mask_id=mask_id)
+    else:
+        denoise_fn = Unet(
+            dim=32,
+            dim_mults=(1, 2, 4, 8),
+            channels=1,
+        ).cuda(0)
+        functional.set_step_mode(net=denoise_fn, step_mode='m')
+        abdiff = AbsorbingDiffusion(denoise_fn, mask_id=mask_id)
 
     if not os.path.exists("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name):
         os.makedirs("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name)
     save_path = "./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name
 
-    # optimizer = torch.optim.Adam(denoise_fn.parameters(), lr=1e-3)
     optimizer = torch.optim.AdamW(denoise_fn.parameters(),
                                   lr=1e-3,
                                   betas=(0.9, 0.999),
@@ -154,32 +177,51 @@ if __name__ == '__main__':
 
             denoise_fn.eval()
             sample_list = []
-            for i in range(2):
-                # sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
-                sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
-                sample_list.append(sample)
-            sample = torch.cat(sample_list, dim=0)
-            with torch.inference_mode():
-                z = model.vq_layer.quantize(sample.cuda(0))
-                z = z.permute(0, 3, 1, 2).contiguous()
-                quantized = torch.unsqueeze(z, dim=0)
-                quantized = quantized.repeat(16, 1, 1, 1, 1)
+            if args.model == 'snn-vq-vae_1d':
+                for i in range(1):
+                    sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 256)
+                    sample_list.append(sample)
+                # sample = torch.cat(sample_list, dim=0)
+                with torch.inference_mode():
+                    z = model.vq_layer.quantize(sample.cuda(0))
+                    z = z.permute(0, 2, 1).contiguous()
+                    # quantized = torch.unsqueeze(z, dim=0)
+                    # quantized = quantized.repeat(16, 1, 1, 1)
 
-                quantized = model.vq_layer.poisson(quantized)
+                    quantized = model.vq_layer.poisson(z)
 
-                pred = model.decoder(quantized)
-                pred = torch.tanh(model.memout(pred))
+                    pred = model.decoder(quantized)
+                    pred = torch.tanh(model.memout(pred))
 
-            generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-            # generated_samples = generated_samples.reshape(4, 8, 28, 28)
-            generated_samples = generated_samples.reshape(4, 8, 28, 28)
+                generated_samples = pred.reshape(-1, 1024)
+                np.save(save_path + "/epoch=" + str(epoch) + "_test.npy", generated_samples.cpu().numpy())
+            else:
+                for i in range(2):
+                    sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
+                    # sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 8, 8)
+                    sample_list.append(sample)
+                sample = torch.cat(sample_list, dim=0)
+                with torch.inference_mode():
+                    z = model.vq_layer.quantize(sample.cuda(0))
+                    z = z.permute(0, 3, 1, 2).contiguous()
+                    quantized = torch.unsqueeze(z, dim=0)
+                    quantized = quantized.repeat(16, 1, 1, 1, 1)
 
-            fig = plt.figure(figsize=(10, 5), constrained_layout=True)
-            gs = fig.add_gridspec(4, 8)
-            for n_row in range(4):
-                for n_col in range(8):
-                    f_ax = fig.add_subplot(gs[n_row, n_col])
-                    f_ax.imshow(generated_samples[n_row, n_col], cmap="gray")
-                    f_ax.axis("off")
-            plt.savefig(save_path + "/epoch=" + str(epoch) + "_test.png")
+                    quantized = model.vq_layer.poisson(quantized)
+
+                    pred = model.decoder(quantized)
+                    pred = torch.tanh(model.memout(pred))
+
+                generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
+                generated_samples = generated_samples.reshape(4, 8, 28, 28)
+                # generated_samples = generated_samples.reshape(4, 8, 32, 32)
+
+                fig = plt.figure(figsize=(10, 5), constrained_layout=True)
+                gs = fig.add_gridspec(4, 8)
+                for n_row in range(4):
+                    for n_col in range(8):
+                        f_ax = fig.add_subplot(gs[n_row, n_col])
+                        f_ax.imshow(generated_samples[n_row, n_col], cmap="gray")
+                        f_ax.axis("off")
+                plt.savefig(save_path + "/epoch=" + str(epoch) + "_test.png")
             torch.save(denoise_fn.state_dict(), save_path + '/diff_model_' + str(epoch) + '.pth')

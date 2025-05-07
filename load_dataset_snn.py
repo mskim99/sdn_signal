@@ -440,7 +440,7 @@ def load_MNIST_C(data_path, option='zigzag'):
 class SignalToImageDataset(VisionDataset):
     def __init__(self, data_path, image_shape=(28, 28), train=True, split_ratio=0.8, transform=None):
         self.data_path = data_path
-        list = glob.glob(data_path + '/signal_img_res_28/*.jpeg')
+        list = glob.glob(data_path + '/signal_img_res_32/*.jpeg')
         len_list = len(list)
         # random.shuffle(list)
         if train:
@@ -518,7 +518,7 @@ def load_signal_to_image_label(data_path, batch_size):
 class SignalDataset(VisionDataset):
     def __init__(self, data_path, shape=(48000), train=True, split_ratio=0.8, transform=None):
         self.data_path = data_path
-        list = glob.glob(data_path + '/signal_1d/*.npy')
+        list = glob.glob(data_path + '/signal_1d_res_1024/*.npy')
         len_list = len(list)
         random.shuffle(list)
         if train:
@@ -535,8 +535,7 @@ class SignalDataset(VisionDataset):
         # data = np.load(self.data_list[idx]).astype(np.float32)
         data = np.load(self.data_list[idx])
         # data = data[:, :, 0]
-        data = torch.from_numpy(data).unsqueeze(0)  # (1, N) 형태로 변환
-        # data = data / 255.
+        # data = torch.from_numpy(data).unsqueeze(0)  # (1, N) 형태로 변환
         data = (data - data.min()) / (data.max() - data.min())
 
         return data, data

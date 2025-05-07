@@ -28,17 +28,17 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
-    parser.add_argument('--dir_name', type=str, default='result_cb_256')
+    parser.add_argument('--dir_name', type=str, default='result_ld_128')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
     parser.add_argument('--sample_model', type=str, default='pixelsnn')
-    parser.add_argument('--epochs', type=int, default=101)
+    parser.add_argument('--epochs', type=int, default=201)
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')
-    parser.add_argument('--codebook_size', type=int, default=256)
-    parser.add_argument('--resolution', type=int, default=28)
+    parser.add_argument('--codebook_size', type=int, default=128)
+    parser.add_argument('--resolution', type=int, default=32)
     args = parser.parse_args()
 
     setup_seed(args.seed)
@@ -83,7 +83,7 @@ if __name__ == '__main__':
         functional.set_step_mode(net=model, step_mode='m')
     if args.model == 'snn-vq-vae_1d':
         model = SNN_VQVAE_1D(1, embedding_dim, num_embeddings, train_data_variance)
-        functional.set_step_mode(net=model, step_mode='m')
+        functional.set_step_mode(net=model, step_mode='s')
     elif args.model == 'snn-vq-vae-uni':
         model = SNN_VQVAE_uni(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='m')
@@ -97,7 +97,7 @@ if __name__ == '__main__':
 
     # optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     optimizer = torch.optim.AdamW(model.parameters(),
-                                  lr=1e-3,
+                                  lr=1e-4,
                                   betas=(0.9, 0.999),
                                   weight_decay=0.001)
 
@@ -118,7 +118,9 @@ if __name__ == '__main__':
                 images = images - 0.5  # normalize to [-0.5, 0.5]
                 images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
             else:
-                images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1)
+                images = images - 0.5  # normalize to [-0.5, 0.5]
+                # print(images.shape)
+                images_spike = images.unsqueeze(0).repeat(16, 1, 1)
             if args.model == 'snn-vae':
                 loss_eq, loss_rec = model(images_spike, images)
             elif args.model == 'snn-vq-vae' or args.model == 'snn-vq-vae-uni' or args.model == 'snn-vq-vae_1d':
@@ -172,7 +174,7 @@ if __name__ == '__main__':
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
             elif args.model == "snn-vq-vae_1d":
-                images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1)
+                images_spike = norm_images.repeat(16, 1, 1)
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
             elif args.model == "snn-vq-vae-uni":
@@ -201,6 +203,8 @@ if __name__ == '__main__':
 
                 plt.savefig("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.png")
             else:
+                # print(recon_images.shape)
+                np.save("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test_gt.npy", images.cpu().numpy())
                 np.save("./" + args.dir_name + "/" + args.dataset_name + '/' + args.model + "/epoch=" + str(epoch) + "_test.npy", recon_images.cpu().numpy())
 
             torch.save(model.state_dict(), save_path + '/model_ae_' + str(epoch) + '.pth')

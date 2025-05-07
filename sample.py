@@ -11,7 +11,7 @@ from torchmetrics.image.kid import KernelInceptionDistance
 
 import matplotlib.pyplot as plt
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+os.environ['CUDA_VISIBLE_DEVICES'] = '4'
 os.environ['RANK'] = '0'
 os.environ['WORLD_SIZE'] = '1'
 os.environ['MASTER_ADDR'] = '127.0.0.1'
@@ -30,6 +30,8 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
+    parser.add_argument('--ae_dir_name', type=str, default='result_cb_256')
+    parser.add_argument('--dir_name', type=str, default='diff_result')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
@@ -38,13 +40,13 @@ if __name__ == '__main__':
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')
-    parser.add_argument('--codebook_size', type=int, default=128)
+    parser.add_argument('--codebook_size', type=int, default=256)
     args = parser.parse_args()
 
     setup_seed(args.seed)
-    if not os.path.exists("./result/" + args.dataset_name + '/' + args.model):
-        os.makedirs("./result/" + args.dataset_name + '/' + args.model)
-    save_path = "./result/" + args.dataset_name + '/' + args.model
+    if not os.path.exists("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model):
+        os.makedirs("./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model)
+    save_path = "./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model
 
     batch_size = 1
     embedding_dim = 16
@@ -107,7 +109,7 @@ if __name__ == '__main__':
     print("The model is ready!")
 
     model.load_state_dict(torch.load(save_path + '/model.pth'))
-    denoise_fn.load_state_dict(torch.load(save_path + '/diff_result/diff_model.pth'))
+    denoise_fn.load_state_dict(torch.load(save_path + '/' + args.dir_name + '/diff_model.pth'))
 
     model.eval()
     denoise_fn.eval()
@@ -125,9 +127,9 @@ if __name__ == '__main__':
                 e, recon_images, _ = model(images_spike, norm_images)
                 functional.reset_net(model)
 
-    if not os.path.exists("./sample_part/" + args.dataset_name + '/' + args.model):
-        os.makedirs("./sample_part/" + args.dataset_name + '/' + args.model)
-    sample_path = "./sample_part/" + args.dataset_name + '/' + args.model
+    if not os.path.exists("./sample/" + args.dataset_name + '/' + args.model):
+        os.makedirs("./sample/" + args.dataset_name + '/' + args.model)
+    sample_path = "./sample/" + args.dataset_name + '/' + args.model
 
     denoise_fn.eval()
     temp = [0.001, 0.01, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1]
@@ -135,7 +137,7 @@ if __name__ == '__main__':
         for k in range(20):
             sample_list = []
             for i in range(1):
-                sample = (abdiff.sample(temp=tem, sample_steps=100)).reshape(16, 48, 48)
+                sample = (abdiff.sample(temp=tem, sample_steps=100)).reshape(16, 7, 7)
                 sample_list.append(sample)
                 functional.reset_net(denoise_fn)
             sample = torch.cat(sample_list, dim=0)
@@ -153,5 +155,8 @@ if __name__ == '__main__':
                 pred = torch.tanh(model.memout(pred))
 
             generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-            generated_samples = generated_samples.reshape(4, 4, 192, 192)
+            generated_samples = generated_samples.reshape(4, 4, 28, 28)
+
+            if not os.path.exists(sample_path + '/' + str(tem)):
+                os.makedirs(sample_path + '/' + str(tem))
             cv2.imwrite(sample_path + '/' + str(tem) + '/image_' + str(tem) + '_' + str(k) + '.png', generated_samples[0, 0, :, :])

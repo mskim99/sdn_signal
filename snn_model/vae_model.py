@@ -87,7 +87,7 @@ class VectorQuantizer(nn.Module):
 class Encoder(nn.Module):
     """Encoder of VQ-VAE"""
     
-    def __init__(self, in_dim=1, latent_dim=16):
+    def __init__(self, in_dim=1, latent_dim=128):
         super().__init__()
         self.in_dim = in_dim
         self.latent_dim = latent_dim
@@ -103,8 +103,18 @@ class Encoder(nn.Module):
             layer.BatchNorm2d(64),
             neuron.LIFNode(surrogate_function=surrogate.ATan()),
 
-            layer.Conv2d(in_channels=64, out_channels=latent_dim, kernel_size=1,
-            stride=1, padding=0),
+            layer.Conv2d(in_channels=64, out_channels=128, kernel_size=3,
+            stride=2, padding=0),
+            layer.BatchNorm2d(128),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+
+            layer.Conv2d(in_channels=128, out_channels=256, kernel_size=3,
+                         stride=2, padding=0),
+            layer.BatchNorm2d(256),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+
+            layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=1,
+                         stride=1, padding=0),
             layer.BatchNorm2d(latent_dim),
             neuron.LIFNode(surrogate_function=surrogate.ATan()),
             )
@@ -117,13 +127,23 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     """Decoder of VQ-VAE"""
     
-    def __init__(self, out_dim=1, latent_dim=16):
+    def __init__(self, out_dim=1, latent_dim=128):
         super().__init__()
         self.out_dim = out_dim
         self.latent_dim = latent_dim
         
         self.snn_convs = nn.Sequential(
-            layer.ConvTranspose2d(in_channels=latent_dim, out_channels=64, kernel_size=3,
+            layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
+                                  stride=2, padding=1, output_padding=1),
+            layer.BatchNorm2d(256),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+
+            layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=3,
+                                  stride=2, padding=1, output_padding=1),
+            layer.BatchNorm2d(128),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+
+            layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=3,
             stride=2, padding=1, output_padding=1),
             layer.BatchNorm2d(64),
             neuron.LIFNode(surrogate_function=surrogate.ATan()),
@@ -136,7 +156,7 @@ class Decoder(nn.Module):
 
 
             layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
-            stride=1, padding=1, output_padding=0),
+            stride=2, padding=1, output_padding=1),
 
         )
     def forward(self, x):
@@ -165,7 +185,6 @@ class SNN_VQVAE(nn.Module):
     def forward(self, x,image):
         # x: [t, B, C, H, W]
         z = self.encoder(x)
-        # print(z.shape)
         if not self.training:
             e,enco = self.vq_layer(z)
             x_recon = self.decoder(e)
@@ -180,6 +199,46 @@ class SNN_VQVAE(nn.Module):
         recon_loss = real_recon_loss / self.data_variance
         
         return e_q_loss,recon_loss,real_recon_loss
+
+
+class SNN_VQVAE_COND(nn.Module):
+    """VQ-VAE"""
+
+    def __init__(self, in_dim, embedding_dim, num_embeddings, data_variance,
+                 commitment_cost=0.25):
+        super().__init__()
+        self.in_dim = in_dim
+        self.embedding_dim = embedding_dim
+        self.num_embeddings = num_embeddings
+        self.data_variance = data_variance
+
+        self.encoder = Encoder(in_dim, embedding_dim)
+        self.vq_layer = VectorQuantizer(embedding_dim, num_embeddings, commitment_cost)
+        self.decoder = Decoder(in_dim, embedding_dim)
+        # TODO:
+        self.memout = MembraneOutputLayer()
+
+        self.class_emb = nn.Embedding(60, 8)
+
+    def forward(self, x, image, idx):
+        # x: [t, B, C, H, W]
+        embed = self.class_emb(idx)
+        z = self.encoder(x)
+
+        if not self.training:
+            e, enco = self.vq_layer(z)
+            x_recon = self.decoder(e)
+            x_recon = torch.tanh(self.memout(x_recon))
+            return e, x_recon, enco
+
+        e, e_q_loss = self.vq_layer(z)
+        x_recon = self.decoder(e)
+        x_recon = torch.tanh(self.memout(x_recon))
+
+        real_recon_loss = F.mse_loss(x_recon, image)
+        recon_loss = real_recon_loss / self.data_variance
+
+        return e_q_loss, recon_loss, real_recon_loss
 
 class SNN_VAE(nn.Module):
     def __init__(self):
@@ -593,7 +652,7 @@ class CNN_VectorQuantizer(nn.Module):
 class CNN_Encoder(nn.Module):
     """Encoder of VQ-VAE"""
     
-    def __init__(self, in_dim=3, latent_dim=16):
+    def __init__(self, in_dim=3, latent_dim=128):
         super().__init__()
         self.in_dim = in_dim
         self.latent_dim = latent_dim
@@ -603,7 +662,13 @@ class CNN_Encoder(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 64, 3, stride=2, padding=1),
             nn.ReLU(inplace=True),
-            nn.Conv2d(64, latent_dim, 1),
+            nn.Conv2d(64, 128, 3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(128, 256, 3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(256, 512, 3, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(512, latent_dim, 1),
         )
         
     def forward(self, x):
@@ -612,13 +677,19 @@ class CNN_Encoder(nn.Module):
 class CNN_Decoder(nn.Module):
     """Decoder of VQ-VAE"""
     
-    def __init__(self, out_dim=1, latent_dim=16):
+    def __init__(self, out_dim=1, latent_dim=128):
         super().__init__()
         self.out_dim = out_dim
         self.latent_dim = latent_dim
         
         self.convs = nn.Sequential(
-            nn.ConvTranspose2d(latent_dim, 64, 3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(latent_dim, 512, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(512, 256, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(256, 128, 3, stride=2, padding=1, output_padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, 3, stride=2, padding=1, output_padding=1),
             nn.ReLU(inplace=True),
             nn.ConvTranspose2d(64, 32, 3, stride=2, padding=1, output_padding=1),
             nn.ReLU(inplace=True),
