@@ -84,84 +84,153 @@ class VectorQuantizer(nn.Module):
         """Returns embedding tensor for a batch of indices."""
         return self.embeddings(encoding_indices)      
 
+class DoubleConv(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+
+        self.double_conv = nn.Sequential(
+            layer.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=1),
+            layer.BatchNorm2d(out_channels),
+            neuron.LIFNode(surrogate_function=surrogate.ATan())
+        )
+
+    def forward(self, x):
+        return self.double_conv(x)
+
 class Encoder(nn.Module):
     """Encoder of VQ-VAE"""
     
-    def __init__(self, in_dim=1, latent_dim=128):
+    def __init__(self, in_dim=1, latent_dim=64):
         super().__init__()
         self.in_dim = in_dim
         self.latent_dim = latent_dim
 
-        self.snn_convs = nn.Sequential(
+        self.snn_conv1 = nn.Sequential(
             layer.Conv2d(in_channels=in_dim, out_channels=32, kernel_size=3,
             stride=2, padding=1),
             layer.BatchNorm2d(32),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
+        self.snn_conv2 = nn.Sequential(
             layer.Conv2d(in_channels=32,out_channels=64, kernel_size=3,
             stride=2, padding=1),
             layer.BatchNorm2d(64),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
+        self.snn_conv3 = nn.Sequential(
             layer.Conv2d(in_channels=64, out_channels=128, kernel_size=3,
-            stride=2, padding=0),
+            stride=2, padding=1),
             layer.BatchNorm2d(128),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
+        self.snn_conv4 = nn.Sequential(
             layer.Conv2d(in_channels=128, out_channels=256, kernel_size=3,
-                         stride=2, padding=0),
+                         stride=2, padding=1),
             layer.BatchNorm2d(256),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
-            layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=1,
-                         stride=1, padding=0),
-            layer.BatchNorm2d(latent_dim),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
-            )
+        self.snn_conv5 = layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=3,
+                         stride=2, padding=1)
         
     def forward(self, x):
-        # [t, b, c, h, w]
-        x = self.snn_convs(x)
-        return x
+
+        features = []
+        # print(x.shape)
+        x = self.snn_conv1(x)
+        features.append(x)
+        # print(x.shape)
+        x = self.snn_conv2(x)
+        features.append(x)
+        # print(x.shape)
+        x = self.snn_conv3(x)
+        features.append(x)
+        # print(x.shape)
+        x = self.snn_conv4(x)
+        features.append(x)
+        # print(x.shape)
+        x = self.snn_conv5(x)
+        # print(x.shape)
+
+        return x, features
 
 class Decoder(nn.Module):
     """Decoder of VQ-VAE"""
     
-    def __init__(self, out_dim=1, latent_dim=128):
+    def __init__(self, out_dim=1, latent_dim=64):
         super().__init__()
         self.out_dim = out_dim
         self.latent_dim = latent_dim
-        
-        self.snn_convs = nn.Sequential(
-            layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
+
+        ''' 
+        # Non U-Net Code
+        self.snn_conv1 = nn.Sequential(
+            layer.Conv2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
                                   stride=2, padding=1, output_padding=1),
             layer.BatchNorm2d(256),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
-            layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=3,
+        self.snn_conv2 = nn.Sequential(
+            layer.Conv2d(in_channels=256, out_channels=128, kernel_size=3,
                                   stride=2, padding=1, output_padding=1),
             layer.BatchNorm2d(128),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
-            layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=3,
+        self.snn_conv3 = nn.Sequential(
+            layer.Conv2d(in_channels=128, out_channels=64, kernel_size=3,
             stride=2, padding=1, output_padding=1),
             layer.BatchNorm2d(64),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
-
-            layer.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3,
+        self.snn_conv4 = nn.Sequential(
+            layer.Conv2d(in_channels=64, out_channels=32, kernel_size=3,
             stride=2, padding=1, output_padding=1),
             layer.BatchNorm2d(32),
-            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
+
+        self.snn_conv5 = layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
+            stride=2, padding=1, output_padding=1)
+        '''
 
 
-            layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
-            stride=2, padding=1, output_padding=1),
+        self.snn_conv1 = layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
+                                  stride=2, padding=1, output_padding=1)
+        self.doubleconv1 = DoubleConv(512, 256)
 
-        )
-    def forward(self, x):
-        # [t, b, c, h, w]
-        x = self.snn_convs(x)
+        self.snn_conv2 = layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=3,
+                                  stride=2, padding=1, output_padding=1)
+        self.doubleconv2 = DoubleConv(256, 128)
+
+        self.snn_conv3 = layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=3,
+            stride=2, padding=1, output_padding=1)
+        self.doubleconv3 = DoubleConv(128, 64)
+
+        self.snn_conv4 = layer.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3,
+            stride=2, padding=1, output_padding=1)
+        self.doubleconv4 = DoubleConv(64, 32)
+
+        self.snn_conv5 = layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
+            stride=2, padding=1, output_padding=1)
+
+    def forward(self, x, features):
+
+        x = self.snn_conv1(x)
+        x = torch.cat([x, features[3]], dim=2)
+        x = self.doubleconv1(x)
+
+        x = self.snn_conv2(x)
+        x = torch.cat([x, features[2]], dim=2)
+        x = self.doubleconv2(x)
+
+        x = self.snn_conv3(x)
+        x = torch.cat([x, features[1]], dim=2)
+        x = self.doubleconv3(x)
+
+        x = self.snn_conv4(x)
+        x = torch.cat([x, features[0]], dim=2)
+        x = self.doubleconv4(x)
+
+        x = self.snn_conv5(x)
+
         return x
 
 class SNN_VQVAE(nn.Module):
@@ -184,15 +253,15 @@ class SNN_VQVAE(nn.Module):
 
     def forward(self, x,image):
         # x: [t, B, C, H, W]
-        z = self.encoder(x)
+        z, f = self.encoder(x)
         if not self.training:
             e,enco = self.vq_layer(z)
-            x_recon = self.decoder(e)
+            x_recon = self.decoder(e, f)
             x_recon = torch.tanh(self.memout(x_recon))
             return e, x_recon,enco
         
         e, e_q_loss = self.vq_layer(z)
-        x_recon = self.decoder(e)
+        x_recon = self.decoder(e, f)
         x_recon = torch.tanh(self.memout(x_recon))
         
         real_recon_loss = F.mse_loss(x_recon, image)
