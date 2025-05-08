@@ -37,10 +37,16 @@ class VectorQuantizer(nn.Module):
         quantized = quantized.view_as(x_memout) # [128, 7, 7, 16]
         
         if not self.training:
+            # print(quantized.shape)
             quantized = quantized.permute(0, 3, 1, 2).contiguous() #[128, 16, 7, 7]
+            # print(quantized.shape)
             quantized = torch.unsqueeze(quantized, dim=0) #[1, 128, 16, 7, 7]
+            # print(quantized.shape)
             quantized = quantized.repeat(16, 1, 1, 1, 1) #[16, 128, 16, 7, 7]
+            # print(quantized.shape)
             quantized = self.poisson(quantized) # [16, 128, 16, 7, 7]
+            # print(quantized.shape)
+            # print(encoding_indices.shape)
             return quantized,encoding_indices
 
 
@@ -125,31 +131,25 @@ class Encoder(nn.Module):
 
         self.snn_conv4 = nn.Sequential(
             layer.Conv2d(in_channels=128, out_channels=256, kernel_size=3,
-                         stride=2, padding=1),
+            stride=2, padding=1),
             layer.BatchNorm2d(256),
             neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
         self.snn_conv5 = layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=3,
-                         stride=2, padding=1)
+            stride=2, padding=1)
         
     def forward(self, x):
 
         features = []
-        # print(x.shape)
         x = self.snn_conv1(x)
         features.append(x)
-        # print(x.shape)
         x = self.snn_conv2(x)
         features.append(x)
-        # print(x.shape)
         x = self.snn_conv3(x)
         features.append(x)
-        # print(x.shape)
         x = self.snn_conv4(x)
         features.append(x)
-        # print(x.shape)
         x = self.snn_conv5(x)
-        # print(x.shape)
 
         return x, features
 
@@ -193,11 +193,11 @@ class Decoder(nn.Module):
 
 
         self.snn_conv1 = layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
-                                  stride=2, padding=1, output_padding=1)
+            stride=2, padding=1, output_padding=1)
         self.doubleconv1 = DoubleConv(512, 256)
 
         self.snn_conv2 = layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=3,
-                                  stride=2, padding=1, output_padding=1)
+            stride=2, padding=1, output_padding=1)
         self.doubleconv2 = DoubleConv(256, 128)
 
         self.snn_conv3 = layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=3,
@@ -213,20 +213,34 @@ class Decoder(nn.Module):
 
     def forward(self, x, features):
 
+        # print(x.shape)
         x = self.snn_conv1(x)
-        x = torch.cat([x, features[3]], dim=2)
+        # print(x.shape)
+        if features is None:
+            x = torch.cat([x, x], dim=2)
+        else:
+            x = torch.cat([x, features[3]], dim=2)
         x = self.doubleconv1(x)
 
         x = self.snn_conv2(x)
-        x = torch.cat([x, features[2]], dim=2)
+        if features is None:
+            x = torch.cat([x, x], dim=2)
+        else:
+            x = torch.cat([x, features[2]], dim=2)
         x = self.doubleconv2(x)
 
         x = self.snn_conv3(x)
-        x = torch.cat([x, features[1]], dim=2)
+        if features is None:
+            x = torch.cat([x, x], dim=2)
+        else:
+            x = torch.cat([x, features[1]], dim=2)
         x = self.doubleconv3(x)
 
         x = self.snn_conv4(x)
-        x = torch.cat([x, features[0]], dim=2)
+        if features is None:
+            x = torch.cat([x, x], dim=2)
+        else:
+            x = torch.cat([x, features[0]], dim=2)
         x = self.doubleconv4(x)
 
         x = self.snn_conv5(x)
@@ -254,8 +268,11 @@ class SNN_VQVAE(nn.Module):
     def forward(self, x,image):
         # x: [t, B, C, H, W]
         z, f = self.encoder(x)
+        # print(z.shape)
         if not self.training:
             e,enco = self.vq_layer(z)
+            # print(e.shape)
+            # print(enco.shape)
             x_recon = self.decoder(e, f)
             x_recon = torch.tanh(self.memout(x_recon))
             return e, x_recon,enco
@@ -347,7 +364,7 @@ class SNN_VAE(nn.Module):
 
 
     def encode(self, x, scheduled=True):
-        # print(x.shape)
+
         x = self.encoder(x) # (T,N,C,7,7)
 
         x = torch.flatten(x, start_dim=2, end_dim=-1) # (T,N,C*H*W)

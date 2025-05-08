@@ -15,10 +15,11 @@ def get_data_for_diff(train_loader,model):
         images = images - 0.5 # normalize to [-0.5, 0.5]
         images = images.cuda()
         images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
-
+        # print(images_spike.shape)
         with torch.inference_mode():
-            _,_,encoding_indices = model(images_spike,images) # [B, C, H, W, T]
-            train_indices.append(encoding_indices.reshape(images.shape[0],8,8).cpu())
+            z,_,encoding_indices = model(images_spike,images) # [B, C, H, W, T]
+            # train_indices.append(encoding_indices.reshape(32,1,1,1).cpu())
+            train_indices.append(z.cpu())
 
     return train_indices  
 
@@ -48,9 +49,11 @@ class AbsorbingDiffusion(Sampler):
 
     def q_sample(self, x_0, t):
         x_t, x_0_ignore = x_0.clone(), x_0.clone()
-        t_mask = t.reshape(x_0.shape[0], 1, 1,1)
-        t_mask = t_mask.expand(x_0.shape[0], 1, 8, 8)
+        t_mask = t.reshape(x_0.shape[0], 1, 1, 1, 1)
+        t_mask = t_mask.expand(x_0.shape[0], 32, 16, 1, 1)
         # t_mask = t_mask.expand(x_0.shape[0], 1, 48, 48)
+        # print(x_t.shape)
+        # print(t_mask.shape)
         mask = torch.rand_like(x_t.float()) < (t_mask.float() / self.num_timesteps)
 
         x_t[mask] = self.mask_id
@@ -68,6 +71,8 @@ class AbsorbingDiffusion(Sampler):
 
         x_0_hat_logits = self._denoise_fn(x_t, t=t)
 
+        # print(x_0_hat_logits.shape)
+        # print(x_0_ignore.shape)
         if self.loss_type == 'mse':
             loss = torch.abs(x_0_hat_logits - x_0_ignore)
         elif self.loss_type == 'elbo' or self.loss_type == 'reweighted_elbo':
@@ -96,7 +101,7 @@ class AbsorbingDiffusion(Sampler):
     def sample(self, temp=1.0, sample_steps=None):
 
         b, device = int(self.n_samples), 'cuda'
-        x_t = torch.ones(b,1,8,8, device=device).long() * self.mask_id
+        x_t = torch.ones(16, 32, 16, 1, 1, device=device).long() * self.mask_id
         # x_t = torch.ones(b, 1, 48, 48, device=device).long() * self.mask_id
         unmasked = torch.zeros_like(x_t, device=device).bool()
 
@@ -105,8 +110,8 @@ class AbsorbingDiffusion(Sampler):
             t = torch.full((b,), t, device=device, dtype=torch.long)
 
             # where to unmask
-            t_mask = t.reshape(b, 1, 1,1)
-            t_mask = t_mask.expand(b, 1, 8, 8)
+            t_mask = t.reshape(b, 1, 1, 1, 1)
+            t_mask = t_mask.expand(16, 32, 16, 1, 1)
             # t_mask = t_mask.expand(b, 1, 48, 48)
             changes = torch.rand_like(x_t.float()) < 1/t_mask.float()
             changes = changes
@@ -116,20 +121,16 @@ class AbsorbingDiffusion(Sampler):
             # update mask with changes
             unmasked = torch.bitwise_or(unmasked, changes)
 
-            # x_t_for_unet = F.pad(input=x_t, pad=(0, 1, 1, 0), mode='constant', value = mask_id) # for unet
-            #denoise_fn = self._denoise_fn.cuda(1)
-            x_0_logits = self._denoise_fn(x_t.float(), t=t).permute(0,2,3,1)
+            x_0_logits = self._denoise_fn(x_t.float(), t=t)
             functional.reset_net(self._denoise_fn)
-            # x_0_logits = x_0_logits[:,:,1:,0:-1] # for unet
 
             # scale by temperature
-            # 温度越高 多样性越强
             x_0_logits = x_0_logits / temp
-            # 创建一个类别分布，表示每个token的概率
             x_0_dist = dists.Categorical(
                 logits=x_0_logits)
             x_0_hat = x_0_dist.sample().long()
             x_0_hat = x_0_hat.unsqueeze(dim=1)
+            x_0_hat = x_0_hat.permute(0,2,3,1,4)
             x_t[changes] = x_0_hat[changes]
 
         return x_t
@@ -152,7 +153,7 @@ class DummyModel(nn.Module):
         super(DummyModel, self).__init__()
         self.num_embeddings = num_embeddings
         self.conv1 = nn.Sequential(  # with batchnorm
-            layer.Conv2d(in_channels=n_channel*2, out_channels=64, kernel_size=3, stride=1, padding=1),
+            layer.Conv2d(in_channels=16, out_channels=64, kernel_size=3, stride=1, padding=1),
             layer.BatchNorm2d(64),
             neuron.LIFNode(surrogate_function=surrogate.ATan()))
         self.conv2 = nn.Sequential(
@@ -185,10 +186,11 @@ class DummyModel(nn.Module):
         # FIXME:
         # x:b,c,h,w
         # t:b
-        t = torch.ones_like(x)*(t.unsqueeze(1).unsqueeze(2).unsqueeze(3))
+        # print(x.shape)
+        # print(t.shape)
+        t = torch.ones_like(x)*(t.unsqueeze(1).unsqueeze(2).unsqueeze(3).unsqueeze(4))
         x = torch.cat((x,t),dim=1)
-        #print(x.shape)
-        x = x.unsqueeze(dim = 0).repeat(16, 1, 1, 1, 1)
+        # x = x.unsqueeze(dim = 0).repeat(16, 1, 1, 1, 1)
     
         x1 = self.conv1(x)
         x2 = self.conv2(x1)
@@ -197,6 +199,7 @@ class DummyModel(nn.Module):
         x5 = self.conv5(x4)
         x6 = self.conv6(torch.cat((x5,x1),dim=2))
         outputs = torch.sum(x6,dim = 0)/16
+        outputs = outputs.reshape([16, 32, 16, 1, 1])
 
         return outputs
 
