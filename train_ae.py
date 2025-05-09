@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
-    parser.add_argument('--dir_name', type=str, default='result_res_32_3')
+    parser.add_argument('--dir_name', type=str, default='result_res_32_4')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
@@ -81,6 +81,9 @@ if __name__ == '__main__':
     if args.model == 'snn-vq-vae':
         model = SNN_VQVAE(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='m')
+    if args.model == 'snn-vq-vae_cond':
+        model = SNN_VQVAE_COND(1, embedding_dim, num_embeddings, train_data_variance)
+        functional.set_step_mode(net=model, step_mode='m')
     if args.model == 'snn-vq-vae_1d':
         model = SNN_VQVAE_1D(1, embedding_dim, num_embeddings, train_data_variance)
         functional.set_step_mode(net=model, step_mode='s')
@@ -113,6 +116,7 @@ if __name__ == '__main__':
             model.update_p(epoch, epochs)
         for i, (images, labels) in enumerate(train_loader):
             images = images.cuda(0)
+            labels = labels.int().cuda(0)
             # print(images.shape)
             if args.model != 'snn-vq-vae_1d':
                 images = images - 0.5  # normalize to [-0.5, 0.5]
@@ -125,6 +129,8 @@ if __name__ == '__main__':
                 loss_eq, loss_rec = model(images_spike, images)
             elif args.model == 'snn-vq-vae' or args.model == 'snn-vq-vae-uni' or args.model == 'snn-vq-vae_1d':
                 loss_eq, loss_rec, real_loss_rec = model(images_spike, images)
+            elif args.model == 'snn-vq-vae_cond':
+                loss_eq, loss_rec, real_loss_rec = model(images_spike, images, labels)
             elif args.model == 'vq-vae':
                 loss_eq, loss_rec, real_loss_rec = model(images)
             optimizer.zero_grad()
@@ -143,7 +149,7 @@ if __name__ == '__main__':
                                                                                               float(loss_eq),
                                                                                               float(loss_rec)))
                     # break
-                elif args.model == 'snn-vq-vae' or args.model == 'vq-vae' or args.model == 'snn-vq-vae-uni' or args.model == 'snn-vq-vae_1d' :
+                else:
                     print("[{}/{}][{}/{}]: loss {:.3f} loss_eq {:.3f} loss_rec {:.3f}".format(epoch, epochs, i,
                                                                                               len(train_loader),
                                                                                               (
@@ -162,6 +168,7 @@ if __name__ == '__main__':
         model.eval()
 
         norm_images = (images - 0.5).cuda(0)
+        labels = labels.int().cuda(0)
         with torch.inference_mode():
             if args.model == 'vq-vae':
                 e, recon_images = model(norm_images)
@@ -173,6 +180,10 @@ if __name__ == '__main__':
                 images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
                 # e, recon_images, _ = model(images_spike, norm_images)
                 recon_images = model(images_spike, norm_images)
+                functional.reset_net(model)
+            elif args.model == 'snn-vq-vae_cond':
+                images_spike = norm_images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+                recon_images = model(images_spike, norm_images, labels)
                 functional.reset_net(model)
             elif args.model == "snn-vq-vae_1d":
                 images_spike = norm_images.repeat(16, 1, 1)

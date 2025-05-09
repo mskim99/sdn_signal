@@ -323,6 +323,107 @@ class Decoder(nn.Module):
 
         return x
 
+
+class Encoder_cond(nn.Module):
+    """Encoder of VQ-VAE"""
+
+    def __init__(self, in_dim=1, latent_dim=64, num_classes=46, cond_dim=128):
+        super().__init__()
+        self.in_dim = in_dim
+        self.latent_dim = latent_dim
+
+        self.class_embedding = nn.Embedding(num_classes, cond_dim)
+        self.cond_proj = nn.Linear(cond_dim, 1024)
+
+        self.base = nn.Sequential(
+            layer.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            layer.BatchNorm2d(64),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
+
+        self.in_channels = 64
+        self.layer1 = self.make_layer(64, 2, stride=1)
+        self.layer2 = self.make_layer(128, 2, stride=2)
+        self.layer3 = self.make_layer(256, 2, stride=2)
+        # self.layer4 = self.make_layer(512, 2, stride=1)
+
+        # self.final = layer.Conv2d(256, 16, kernel_size=1)
+
+    def make_layer(self, out_channels, num_block, stride):
+        strides = [stride] + [1] * (num_block - 1)
+        layers = []
+
+        for stride in strides:
+            block = ResidualBlock(self.in_channels, out_channels, stride)
+            layers.append(block)
+            self.in_channels = out_channels
+        return nn.Sequential(*layers)
+
+    def forward(self, x, class_idx):
+
+        # print(x.shape)
+        out = self.base(x)
+
+        # get embedding & reshape
+        class_embed = self.class_embedding(class_idx)  # [B, cond_dim]
+        cond_feature = self.cond_proj(class_embed)  # [B, 64*32*32]
+        cond_feature = cond_feature.view(out.shape)
+
+        # combine (e.g. addition or concat)
+        out = out + cond_feature
+
+        # print(out.shape)
+        out = self.layer1(out)
+        # print(out.shape)
+        out = self.layer2(out)
+        # print(out.shape)
+        out = self.layer3(out)
+        # print(out.shape)
+
+        return out
+
+
+class Decoder_cond(nn.Module):
+    """Decoder of VQ-VAE"""
+
+    def __init__(self, out_dim=1, latent_dim=64, num_classes=46, cond_dim=128):
+        super().__init__()
+        self.out_dim = out_dim
+        self.latent_dim = latent_dim
+
+        self.class_embedding = nn.Embedding(num_classes, cond_dim)
+        self.cond_proj = nn.Linear(cond_dim, 256)
+
+        self.snn_conv2 = layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=1)
+        self.doubleconv2 = DoubleConv(256, 128)
+
+        self.snn_conv3 = layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=1)
+        self.doubleconv3 = DoubleConv(128, 64)
+
+        self.snn_conv4 = layer.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3,
+                                               stride=2, padding=1, output_padding=1)
+        self.doubleconv4 = DoubleConv(64, 32)
+
+        self.snn_conv5 = layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
+                                               stride=2, padding=1, output_padding=1)
+
+    def forward(self, x, class_idx):
+
+        class_embed = self.class_embedding(class_idx)  # [B, cond_dim]
+        cond_feature = self.cond_proj(class_embed)  # [B, 256*8*8]
+        cond_feature = cond_feature.view(x.shape)
+
+        # inject condition (e.g. addition or concat)
+        x = x + cond_feature
+
+        # x = self.snn_conv1(x)
+        x = self.snn_conv2(x)
+        x = self.snn_conv3(x)
+        x = self.snn_conv4(x)
+        x = self.snn_conv5(x)
+
+        return x
+
+
 class SNN_VQVAE(nn.Module):
 
     """VQ-VAE"""
@@ -379,33 +480,28 @@ class SNN_VQVAE_COND(nn.Module):
         self.num_embeddings = num_embeddings
         self.data_variance = data_variance
 
-        self.encoder = Encoder(in_dim, embedding_dim)
+        self.encoder = Encoder_cond(in_dim, embedding_dim)
         self.vq_layer = VectorQuantizer(embedding_dim, num_embeddings, commitment_cost)
-        self.decoder = Decoder(in_dim, embedding_dim)
+        self.decoder = Decoder_cond(in_dim, embedding_dim)
         # TODO:
         self.memout = MembraneOutputLayer()
 
-        self.class_emb = nn.Embedding(60, 8)
-
     def forward(self, x, image, idx):
         # x: [t, B, C, H, W]
-        embed = self.class_emb(idx)
-        z = self.encoder(x)
+        z = self.encoder(x, idx)
 
         if not self.training:
-            e, enco = self.vq_layer(z)
-            x_recon = self.decoder(e)
+            x_recon = self.decoder(z, idx)
             x_recon = torch.tanh(self.memout(x_recon))
-            return e, x_recon, enco
+            return x_recon
 
-        e, e_q_loss = self.vq_layer(z)
-        x_recon = self.decoder(e)
+        x_recon = self.decoder(z, idx)
         x_recon = torch.tanh(self.memout(x_recon))
 
         real_recon_loss = F.mse_loss(x_recon, image)
         recon_loss = real_recon_loss / self.data_variance
 
-        return e_q_loss, recon_loss, real_recon_loss
+        return 0., recon_loss, real_recon_loss
 
 class SNN_VAE(nn.Module):
     def __init__(self):
