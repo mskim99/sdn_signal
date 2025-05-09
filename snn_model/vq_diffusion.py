@@ -3,6 +3,8 @@ import math
 import torch.utils.data.dataloader
 import torch.distributions as dists
 
+from tqdm import tqdm
+
 from spikingjelly.activation_based import functional
 
 from .vae_model import *
@@ -49,8 +51,12 @@ class AbsorbingDiffusion(Sampler):
 
     def q_sample(self, x_0, t):
         x_t, x_0_ignore = x_0.clone(), x_0.clone()
+        '''
         t_mask = t.reshape(x_0.shape[0], 1, 1, 1, 1)
         t_mask = t_mask.expand(x_0.shape[0], 32, 16, 1, 1)
+        '''
+        t_mask = t.reshape(x_0.shape[0], 1, 1, 1, 1)
+        t_mask = t_mask.expand(x_0.shape[0], 32, 1, 32, 32)
         # t_mask = t_mask.expand(x_0.shape[0], 1, 48, 48)
         # print(x_t.shape)
         # print(t_mask.shape)
@@ -101,17 +107,17 @@ class AbsorbingDiffusion(Sampler):
     def sample(self, temp=1.0, sample_steps=None):
 
         b, device = int(self.n_samples), 'cuda'
-        x_t = torch.ones(16, 32, 16, 1, 1, device=device).long() * self.mask_id
+        x_t = torch.ones(16, 32, 1, 32, 32, device=device).long() * self.mask_id
         # x_t = torch.ones(b, 1, 48, 48, device=device).long() * self.mask_id
         unmasked = torch.zeros_like(x_t, device=device).bool()
 
         sample_steps = list(range(1, sample_steps+1))            
-        for t in reversed(sample_steps):
+        for t in tqdm(reversed(sample_steps), desc="sample step", total=len(sample_steps)):
             t = torch.full((b,), t, device=device, dtype=torch.long)
 
             # where to unmask
             t_mask = t.reshape(b, 1, 1, 1, 1)
-            t_mask = t_mask.expand(16, 32, 16, 1, 1)
+            t_mask = t_mask.expand(16, 32, 1, 32, 32)
             # t_mask = t_mask.expand(b, 1, 48, 48)
             changes = torch.rand_like(x_t.float()) < 1/t_mask.float()
             changes = changes
@@ -126,12 +132,19 @@ class AbsorbingDiffusion(Sampler):
 
             # scale by temperature
             x_0_logits = x_0_logits / temp
+            x_0_logits = x_0_logits.long()
+            '''
             x_0_dist = dists.Categorical(
                 logits=x_0_logits)
             x_0_hat = x_0_dist.sample().long()
             x_0_hat = x_0_hat.unsqueeze(dim=1)
             x_0_hat = x_0_hat.permute(0,2,3,1,4)
             x_t[changes] = x_0_hat[changes]
+            '''
+            # print(x_t.shape)
+            # print(x_0_logits.shape)
+            # print(changes.shape)
+            x_t[changes] = x_0_logits[changes]
 
         return x_t
 

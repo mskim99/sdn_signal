@@ -35,13 +35,13 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint', action='store', dest='checkpoint',
                         help='The path of checkpoint, if use checkpoint')
     parser.add_argument('--dataset_name', type=str, default='MNIST')
-    parser.add_argument('--ae_dir_name', type=str, default='result')
-    parser.add_argument('--dir_name', type=str, default='diff_result_unet')
+    parser.add_argument('--ae_dir_name', type=str, default='result_res_32')
+    parser.add_argument('--dir_name', type=str, default='diff_result')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--model', type=str, default='vq-vae')
     parser.add_argument('--data_path', type=str, default='datasets')
     parser.add_argument('--sample_model', type=str, default='pixelsnn')
-    parser.add_argument('--epochs', type=int, default=400)
+    parser.add_argument('--epochs', type=int, default=401)
     parser.add_argument('--metric', type=str, default=None)
     parser.add_argument('--ready', type=str, default=None)
     parser.add_argument('--mask', type=str, default='codebook_size')
@@ -110,6 +110,7 @@ if __name__ == '__main__':
 
     # train diffusion
     model.load_state_dict(torch.load(save_path + '/model.pth'))
+    '''
     if args.model == 'snn-vq-vae_1d':
         train_indices = get_data_for_diff_1d(train_loader, model)
     else:
@@ -127,6 +128,8 @@ if __name__ == '__main__':
         least_common_value = values[torch.min(counts)].item()
         count = torch.min(counts).item()
         mask_id = count
+    '''
+    mask_id = num_embeddings
 
     print("mask_id = ", mask_id)
     print('data for train diffusion is ready!')
@@ -143,9 +146,10 @@ if __name__ == '__main__':
     else:
         denoise_fn = Unet(
             dim=32,
-            dim_mults=(1, 2, 4, 8),
+            dim_mults=(1,2,4,8),
             channels=1,
         ).cuda(0)
+        # denoise_fn = DummyModel(1,num_embeddings).cuda(0)
         functional.set_step_mode(net=denoise_fn, step_mode='m')
         abdiff = AbsorbingDiffusion(denoise_fn, mask_id=mask_id)
 
@@ -154,18 +158,26 @@ if __name__ == '__main__':
     save_path = "./" + args.ae_dir_name + "/" + args.dataset_name + '/' + args.model + '/' + args.dir_name
 
     optimizer = torch.optim.AdamW(denoise_fn.parameters(),
-                                  lr=1e-3,
+                                  lr=1e-4,
                                   betas=(0.9, 0.999),
                                   weight_decay=0.001)
 
     for epoch in range(epochs):
 
         denoise_fn.train()
+        '''
         for batch_idx, (indices) in enumerate(train_indices):
+            # print(indices.shape)
             indices = indices.float().cuda(0)
-            indices = indices.unsqueeze(dim=1)
-            loss = abdiff.train_iter(indices)
+            # indices = indices.unsqueeze(dim=1)
+            '''
+        for batch_idx, (images, labels) in enumerate(train_loader):
+            images = images - 0.5  # normalize to [-0.5, 0.5]
+            images = images.unsqueeze(0).cuda()
+            # images_spike = images.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+            loss = abdiff.train_iter(images)
             loss = loss['loss']
+            # print(loss.shape)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -196,25 +208,34 @@ if __name__ == '__main__':
                 generated_samples = pred.reshape(-1, 1024)
                 np.save(save_path + "/epoch=" + str(epoch) + "_test.npy", generated_samples.cpu().numpy())
             else:
-                for i in range(2):
-                    sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 7, 7)
-                    # sample = (abdiff.sample(temp=0.65, sample_steps=49)).reshape(16, 8, 8)
-                    sample_list.append(sample)
-                sample = torch.cat(sample_list, dim=0)
+                # for i in range(1):
+                # sample = (abdiff.sample(temp=0.65, sample_steps=100)).reshape(16, 1, 32, 32)
+                sample = (abdiff.sample(temp=0.65, sample_steps=100)).float()#.reshape(16, 1, 1, 1, 1)
+                # sample_list.append(sample)
+                # images_spike = sample.unsqueeze(0).repeat(16, 1, 1, 1, 1)
+                sample_sq = sample[0, :, :, :, :].unsqueeze(dim=0)
+                # sample = torch.cat(sample_list, dim=0)
                 with torch.inference_mode():
-                    z = model.vq_layer.quantize(sample.cuda(0))
-                    z = z.permute(0, 3, 1, 2).contiguous()
-                    quantized = torch.unsqueeze(z, dim=0)
-                    quantized = quantized.repeat(16, 1, 1, 1, 1)
+                    # e, generated_samples = model(sample_sq, sample)
 
-                    quantized = model.vq_layer.poisson(quantized)
-
-                    pred = model.decoder(quantized)
+                    z, f = model.encoder(sample)
+                    # z = model.vq_layer.quantize(sample.cuda(0))
+                    # z = model.vq_layer.quantize(z)
+                    # z = z.permute(0, 3, 1, 2, 4).contiguous()
+                    e, _ = model.vq_layer(z)
+            
+                    # quantized = torch.unsqueeze(sample, dim=0)
+                    # quantized = sample.repeat(16, 1, 1, 1, 1)
+                    # print(quantized.shape)
+                    # quantized = model.vq_layer.poisson(sample.float())
+                    pred = model.decoder(e, f)
                     pred = torch.tanh(model.memout(pred))
 
+                ned_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
                 generated_samples = np.array(np.clip((pred + 0.5).cpu().numpy(), 0., 1.) * 255, dtype=np.uint8)
-                generated_samples = generated_samples.reshape(4, 8, 28, 28)
-                # generated_samples = generated_samples.reshape(4, 8, 32, 32)
+                # generated_samples = generated_samples.reshape(4, 8, 28, 28)
+                ned_samples = ned_samples.reshape(4, 8, 32, 32)
+                generated_samples = generated_samples.reshape(4, 8, 32, 32)
 
                 fig = plt.figure(figsize=(10, 5), constrained_layout=True)
                 gs = fig.add_gridspec(4, 8)
@@ -224,4 +245,14 @@ if __name__ == '__main__':
                         f_ax.imshow(generated_samples[n_row, n_col], cmap="gray")
                         f_ax.axis("off")
                 plt.savefig(save_path + "/epoch=" + str(epoch) + "_test.png")
+
+                fig = plt.figure(figsize=(10, 5), constrained_layout=True)
+                gs = fig.add_gridspec(4, 8)
+                for n_row in range(4):
+                    for n_col in range(8):
+                        f_ax = fig.add_subplot(gs[n_row, n_col])
+                        f_ax.imshow(ned_samples[n_row, n_col], cmap="gray")
+                        f_ax.axis("off")
+                plt.savefig(save_path + "/epoch=" + str(epoch) + "_ned_test.png")
+
             torch.save(denoise_fn.state_dict(), save_path + '/diff_model_' + str(epoch) + '.pth')

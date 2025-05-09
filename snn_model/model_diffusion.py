@@ -290,7 +290,7 @@ class Unet(nn.Module):
         # input_channels = channels * (2 if self_condition else 1)
 
         init_dim = default(init_dim, dim)
-        self.init_conv = layer.Conv2d(16, init_dim, 7, padding = 3)
+        self.init_conv = layer.Conv2d(1, init_dim, 7, padding = 3)
 
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -318,7 +318,6 @@ class Unet(nn.Module):
         )
 
         # layers
-
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
         num_resolutions = len(in_out)
@@ -330,6 +329,7 @@ class Unet(nn.Module):
                 block_klass(dim_in, dim_in, time_emb_dim = time_dim),
                 # Residual(PreNorm(dim_in, LinearAttention(dim_in))),
                 # Downsample(dim_in, dim_out) if not is_last else layer.Conv2d(dim_in, dim_out, 3, padding = 1)
+                layer.Conv2d(dim_in, dim_out, 3, padding=1)
             ]))
 
         mid_dim = dims[-1]
@@ -344,14 +344,15 @@ class Unet(nn.Module):
                 block_klass(dim_in+dim_out, dim_out, time_emb_dim = time_dim),
                 block_klass(dim_in+dim_out, dim_out, time_emb_dim = time_dim),
                 # Residual(PreNorm(dim_out, LinearAttention(dim_out))),
-                # Upsample(dim_out, dim_in) if not is_last else  layer.Conv2d(dim_out, dim_in, 3, padding = 1)
+                # Upsample(dim_out, dim_in) if not is_last else layer.Conv2d(dim_out, dim_in, 3, padding = 1)
+                layer.Conv2d(dim_out, dim_in, 3, padding=1)
             ]))
 
         default_out_dim = channels * (1 if not learned_variance else 2)
         self.out_dim = default(out_dim, default_out_dim)
 
         self.final_res_block = block_klass(dim, dim, time_emb_dim = time_dim)
-        self.final_conv = layer.Conv2d(dim, int(dim/2), 1)
+        self.final_conv = layer.Conv2d(dim, 16, 1)
 
     def forward(self, x, t, x_self_cond = None):
         if self.self_condition:
@@ -366,7 +367,7 @@ class Unet(nn.Module):
         h = []
 
         # for block1, block2, attn, downsample in self.downs:
-        for block1, block2, in self.downs:
+        for block1, block2, downsample in self.downs:
             x = block1(x, t)
             h.append(x)
 
@@ -374,21 +375,21 @@ class Unet(nn.Module):
             # x = attn(x)
             h.append(x)
 
-            # x = downsample(x)
+            x = downsample(x)
 
         x = self.mid_block1(x, t)
         # x = self.mid_attn(x)
         x = self.mid_block2(x, t)
 
         # for block1, block2, attn, upsample in self.ups:
-        for block1, block2 in self.ups:
+        for block1, block2, upsample in self.ups:
             x = torch.cat((x, h.pop()), dim = 2)
             x = block1(x, t)
             x = torch.cat((x, h.pop()), dim = 2)
             x = block2(x, t)
             # x = attn(x)
 
-            # x = upsample(x)
+            x = upsample(x)
 
         '''
         x = torch.cat((x, r), dim = 1)

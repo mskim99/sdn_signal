@@ -103,6 +103,37 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
 
+
+class ResidualBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, stride=1):
+        super(ResidualBlock, self).__init__()
+        self.stride = stride
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+
+        self.conv_block = nn.Sequential(
+            layer.Conv2d(self.in_channels, self.out_channels, kernel_size=3, stride=stride, padding=1, bias=False),
+            layer.BatchNorm2d(self.out_channels),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()),
+
+            layer.Conv2d(self.out_channels, self.out_channels, kernel_size=3, stride=1, padding=1, bias=False),
+            layer.BatchNorm2d(self.out_channels)
+        )
+
+        if self.stride != 1 or self.in_channels != self.out_channels:
+            self.downsample = nn.Sequential(
+                layer.Conv2d(self.in_channels, self.out_channels, kernel_size=1, stride=stride, bias=False),
+                layer.BatchNorm2d(self.out_channels)
+            )
+
+    def forward(self, x):
+        out = self.conv_block(x)
+        if self.stride != 1 or self.in_channels != self.out_channels:
+            x = self.downsample(x)
+        out = F.relu(x + out)
+        return out
+
+
 class Encoder(nn.Module):
     """Encoder of VQ-VAE"""
     
@@ -111,6 +142,7 @@ class Encoder(nn.Module):
         self.in_dim = in_dim
         self.latent_dim = latent_dim
 
+        '''
         self.snn_conv1 = nn.Sequential(
             layer.Conv2d(in_channels=in_dim, out_channels=32, kernel_size=3,
             stride=2, padding=1),
@@ -124,22 +156,43 @@ class Encoder(nn.Module):
             neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
         self.snn_conv3 = nn.Sequential(
-            layer.Conv2d(in_channels=64, out_channels=128, kernel_size=3,
-            stride=2, padding=1),
+            layer.Conv2d(in_channels=64, out_channels=128, kernel_size=1),
             layer.BatchNorm2d(128),
             neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
         self.snn_conv4 = nn.Sequential(
-            layer.Conv2d(in_channels=128, out_channels=256, kernel_size=3,
-            stride=2, padding=1),
+            layer.Conv2d(in_channels=128, out_channels=256, kernel_size=1),
             layer.BatchNorm2d(256),
             neuron.LIFNode(surrogate_function=surrogate.ATan()))
 
-        self.snn_conv5 = layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=3,
-            stride=2, padding=1)
-        
-    def forward(self, x):
+        self.snn_conv5 = layer.Conv2d(in_channels=256, out_channels=latent_dim, kernel_size=1)
+        '''
 
+        self.base = nn.Sequential(
+            layer.Conv2d(1, 64, kernel_size=3, stride=1, padding=1, bias=False),
+            layer.BatchNorm2d(64),
+            neuron.LIFNode(surrogate_function=surrogate.ATan()))
+
+        self.in_channels = 64
+        self.layer1 = self.make_layer(64, 2, stride=1)
+        self.layer2 = self.make_layer(128, 2, stride=2)
+        self.layer3 = self.make_layer(256, 2, stride=2)
+        # self.layer4 = self.make_layer(512, 2, stride=1)
+
+        # self.final = layer.Conv2d(256, 16, kernel_size=1)
+
+    def make_layer(self, out_channels, num_block, stride):
+        strides = [stride] + [1] * (num_block - 1)
+        layers = []
+
+        for stride in strides:
+            block = ResidualBlock(self.in_channels, out_channels, stride)
+            layers.append(block)
+            self.in_channels = out_channels
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        '''
         features = []
         x = self.snn_conv1(x)
         features.append(x)
@@ -152,6 +205,25 @@ class Encoder(nn.Module):
         x = self.snn_conv5(x)
 
         return x, features
+        '''
+
+        # print(x.shape)
+        out = self.base(x)
+        # print(out.shape)
+        out = self.layer1(out)
+        # print(out.shape)
+        out = self.layer2(out)
+        # print(out.shape)
+        out = self.layer3(out)
+        # print(out.shape)
+        # out = self.layer4(out)
+        # print(out.shape)
+        # out = self.final(out)
+        # print(out.shape)
+
+        return out
+
+
 
 class Decoder(nn.Module):
     """Decoder of VQ-VAE"""
@@ -191,17 +263,13 @@ class Decoder(nn.Module):
             stride=2, padding=1, output_padding=1)
         '''
 
+        # self.snn_conv1 = layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=1)
+        # self.doubleconv1 = DoubleConv(512, 256)
 
-        self.snn_conv1 = layer.ConvTranspose2d(in_channels=latent_dim, out_channels=256, kernel_size=3,
-            stride=2, padding=1, output_padding=1)
-        self.doubleconv1 = DoubleConv(512, 256)
-
-        self.snn_conv2 = layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=3,
-            stride=2, padding=1, output_padding=1)
+        self.snn_conv2 = layer.ConvTranspose2d(in_channels=256, out_channels=128, kernel_size=1)
         self.doubleconv2 = DoubleConv(256, 128)
 
-        self.snn_conv3 = layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=3,
-            stride=2, padding=1, output_padding=1)
+        self.snn_conv3 = layer.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=1)
         self.doubleconv3 = DoubleConv(128, 64)
 
         self.snn_conv4 = layer.ConvTranspose2d(in_channels=64, out_channels=32, kernel_size=3,
@@ -211,17 +279,18 @@ class Decoder(nn.Module):
         self.snn_conv5 = layer.ConvTranspose2d(in_channels=32, out_channels=out_dim, kernel_size=3,
             stride=2, padding=1, output_padding=1)
 
-    def forward(self, x, features):
+    def forward(self, x):
 
-        # print(x.shape)
+        '''
         x = self.snn_conv1(x)
-        # print(x.shape)
         if features is None:
             x = torch.cat([x, x], dim=2)
         else:
             x = torch.cat([x, features[3]], dim=2)
         x = self.doubleconv1(x)
+        '''
 
+        '''
         x = self.snn_conv2(x)
         if features is None:
             x = torch.cat([x, x], dim=2)
@@ -243,6 +312,13 @@ class Decoder(nn.Module):
             x = torch.cat([x, features[0]], dim=2)
         x = self.doubleconv4(x)
 
+        x = self.snn_conv5(x)
+        '''
+
+        # x = self.snn_conv1(x)
+        x = self.snn_conv2(x)
+        x = self.snn_conv3(x)
+        x = self.snn_conv4(x)
         x = self.snn_conv5(x)
 
         return x
@@ -267,24 +343,29 @@ class SNN_VQVAE(nn.Module):
 
     def forward(self, x,image):
         # x: [t, B, C, H, W]
-        z, f = self.encoder(x)
+        # z, f = self.encoder(x)
+        z = self.encoder(x)
         # print(z.shape)
         if not self.training:
-            e,enco = self.vq_layer(z)
+            # e,enco = self.vq_layer(z)
             # print(e.shape)
             # print(enco.shape)
-            x_recon = self.decoder(e, f)
+            # x_recon = self.decoder(e, f)
+            x_recon = self.decoder(z)
             x_recon = torch.tanh(self.memout(x_recon))
-            return e, x_recon,enco
+            # return e, x_recon,enco
+            return x_recon
         
-        e, e_q_loss = self.vq_layer(z)
-        x_recon = self.decoder(e, f)
+        # e, e_q_loss = self.vq_layer(z)
+        # x_recon = self.decoder(e, f)
+        x_recon = self.decoder(z)
         x_recon = torch.tanh(self.memout(x_recon))
         
         real_recon_loss = F.mse_loss(x_recon, image)
         recon_loss = real_recon_loss / self.data_variance
         
-        return e_q_loss,recon_loss,real_recon_loss
+        # return e_q_loss,recon_loss,real_recon_loss
+        return 0., recon_loss, real_recon_loss
 
 
 class SNN_VQVAE_COND(nn.Module):
